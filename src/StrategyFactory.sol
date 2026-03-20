@@ -4,6 +4,7 @@ pragma solidity ^0.8.23;
 import {Strategy} from "./Strategy.sol";
 import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
 
+/// @notice Deploys and tracks strategy instances for unique loan configurations.
 contract StrategyFactory {
     event NewStrategy(
         address indexed strategy,
@@ -21,6 +22,7 @@ contract StrategyFactory {
     mapping(bytes32 => address) public deployments;
     mapping(address => bool) public deployedStrategies;
 
+    /// @notice Configures the default roles assigned to newly deployed strategies.
     constructor(
         address _management,
         address _performanceFeeRecipient,
@@ -33,6 +35,8 @@ contract StrategyFactory {
         emergencyAdmin = _emergencyAdmin;
     }
 
+    /// @notice Deploys a new strategy for a unique configuration.
+    /// @return The address of the deployed strategy.
     function newStrategy(
         address _asset,
         string calldata _name,
@@ -43,7 +47,7 @@ contract StrategyFactory {
         uint256 _fixedRateBps,
         uint256 _callDuration
     ) external virtual returns (address) {
-        bytes32 key = deploymentKey(
+        bytes32 _key = deploymentKey(
             _asset,
             _borrower,
             _collateralAsset,
@@ -52,7 +56,7 @@ contract StrategyFactory {
             _fixedRateBps,
             _callDuration
         );
-        require(deployments[key] == address(0), "strategy exists");
+        require(deployments[_key] == address(0), "strategy exists");
 
         IStrategyInterface _newStrategy = IStrategyInterface(
             address(
@@ -74,7 +78,7 @@ contract StrategyFactory {
         _newStrategy.setPendingManagement(management);
         _newStrategy.setEmergencyAdmin(emergencyAdmin);
 
-        deployments[key] = address(_newStrategy);
+        deployments[_key] = address(_newStrategy);
         deployedStrategies[address(_newStrategy)] = true;
 
         emit NewStrategy(
@@ -86,6 +90,7 @@ contract StrategyFactory {
         return address(_newStrategy);
     }
 
+    /// @notice Returns the registry key for a strategy configuration.
     function deploymentKey(
         address _asset,
         address _borrower,
@@ -109,6 +114,7 @@ contract StrategyFactory {
             );
     }
 
+    /// @notice Returns the deployed strategy for a configuration, if one exists.
     function deploymentFor(
         address _asset,
         address _borrower,
@@ -132,6 +138,7 @@ contract StrategyFactory {
             ];
     }
 
+    /// @notice Updates the default strategy role addresses.
     function setAddresses(
         address _management,
         address _performanceFeeRecipient,
@@ -143,6 +150,7 @@ contract StrategyFactory {
         keeper = _keeper;
     }
 
+    /// @notice Returns whether a strategy address was deployed by this factory.
     function isDeployedStrategy(
         address _strategy
     ) external view returns (bool) {

@@ -9,6 +9,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
 
+/// @notice Fixed-rate single-borrower strategy secured by posted collateral.
 contract Strategy is BaseHealthCheck {
     using SafeERC20 for ERC20;
     using SafeERC20 for IERC20;
@@ -54,6 +55,11 @@ contract Strategy is BaseHealthCheck {
     event UpdateAllowed(address indexed owner, bool isAllowed);
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
 
+    modifier onlyBorrower() {
+        require(msg.sender == BORROWER, "not borrower");
+        _;
+    }
+
     uint256 public constant LLTV_SCALE = 1e18;
     uint256 public constant ORACLE_PRICE_SCALE = 1e36;
     uint256 public constant SECONDS_PER_YEAR = 365 days;
@@ -75,6 +81,7 @@ contract Strategy is BaseHealthCheck {
     mapping(address => bool) internal allowed;
     mapping(address => bool) internal liquidators;
 
+    /// @notice Deploys a strategy for one borrower, one collateral asset, and one oracle.
     constructor(
         address _asset,
         string memory _name,
@@ -101,75 +108,90 @@ contract Strategy is BaseHealthCheck {
         lastAccrualTime = block.timestamp;
     }
 
-    modifier onlyBorrower() {
-        require(msg.sender == BORROWER, "not borrower");
-        _;
-    }
+    ////////////////////////////////////////////////////////////////
+    //                        SETTER FUNCTIONS                     //
+    ////////////////////////////////////////////////////////////////
 
-    function setAllowed(address owner, bool isAllowed) external onlyManagement {
-        require(owner != address(0), "zero owner");
-        allowed[owner] = isAllowed;
-        emit UpdateAllowed(owner, isAllowed);
-    }
-
-    function setLiquidator(
-        address liquidator,
-        bool isAllowed
+    /// @notice Sets whether an address may deposit into the strategy.
+    function setAllowed(
+        address _owner,
+        bool _isAllowed
     ) external onlyManagement {
-        require(liquidator != address(0), "zero liquidator");
-        liquidators[liquidator] = isAllowed;
-        emit LiquidatorUpdated(liquidator, isAllowed);
+        require(_owner != address(0), "zero owner");
+        allowed[_owner] = _isAllowed;
+        emit UpdateAllowed(_owner, _isAllowed);
     }
 
-    function postCollateral(uint256 amount) external onlyBorrower {
-        require(amount > 0, "zero amount");
+    /// @notice Sets whether an address may liquidate unhealthy or overdue debt.
+    function setLiquidator(
+        address _liquidator,
+        bool _isAllowed
+    ) external onlyManagement {
+        require(_liquidator != address(0), "zero liquidator");
+        liquidators[_liquidator] = _isAllowed;
+        emit LiquidatorUpdated(_liquidator, _isAllowed);
+    }
+
+    ////////////////////////////////////////////////////////////////
+    //                        BORROWER FUNCTIONS                    //
+    ////////////////////////////////////////////////////////////////
+
+    /// @notice Posts additional collateral for the borrower position.
+    function postCollateral(uint256 _amount) external onlyBorrower {
+        require(_amount > 0, "zero amount");
 
         _accrueInterest();
         IERC20(COLLATERAL_ASSET).safeTransferFrom(
             msg.sender,
             address(this),
-            amount
+            _amount
         );
-        totalCollateral += amount;
+        totalCollateral += _amount;
 
-        emit CollateralPosted(msg.sender, amount, totalCollateral);
+        emit CollateralPosted(msg.sender, _amount, totalCollateral);
     }
 
-    function borrow(uint256 amount, address receiver) external onlyBorrower {
+    /// @notice Borrows strategy assets against posted collateral.
+    /// @param _amount The amount of base asset to borrow.
+    /// @param _receiver The address that receives the borrowed assets.
+    function borrow(uint256 _amount, address _receiver) external onlyBorrower {
         require(!TokenizedStrategy.isShutdown(), "shutdown");
-        require(amount > 0, "zero amount");
-        require(receiver != address(0), "zero receiver");
-
-        _accrueInterest();
+        require(_amount > 0, "zero amount");
+        require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
         require(
-            asset.balanceOf(address(this)) >= amount,
+            asset.balanceOf(address(this)) >= _amount,
             "insufficient liquidity"
         );
 
-        principalDebt += amount;
-        debtAmount += amount;
+        _accrueInterest();
+
+        principalDebt += _amount;
+        debtAmount += _amount;
         require(
             _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
 
-        asset.safeTransfer(receiver, amount);
+        asset.safeTransfer(_receiver, _amount);
 
-        emit Borrowed(msg.sender, receiver, amount, debtAmount);
+        emit Borrowed(msg.sender, _receiver, _amount, debtAmount);
     }
 
+    /// @notice Repays outstanding debt.
+    /// @param _amount The requested repayment amount.
+    /// @return actualRepaid The amount of debt actually repaid.
     function repay(
-        uint256 amount
+        uint256 _amount
     ) external onlyBorrower returns (uint256 actualRepaid) {
-        require(amount > 0, "zero amount");
+        require(_amount > 0, "zero amount");
 
         _accrueInterest();
 
-        uint256 currentDebt = debtAmount;
-        require(currentDebt > 0, "no debt");
+        uint256 _currentDebt = debtAmount;
+        require(_currentDebt > 0, "no debt");
 
-        actualRepaid = Math.min(amount, currentDebt);
+        actualRepaid = Math.min(_amount, _currentDebt);
         asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
         _applyRepayment(actualRepaid);
@@ -179,61 +201,75 @@ contract Strategy is BaseHealthCheck {
         emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebtAmount);
     }
 
+    /// @notice Withdraws posted collateral when no debt call is active.
+    /// @param _amount The amount of collateral to withdraw.
+    /// @param _receiver The address that receives the collateral.
     function withdrawCollateral(
-        uint256 amount,
-        address receiver
+        uint256 _amount,
+        address _receiver
     ) external onlyBorrower {
-        require(amount > 0, "zero amount");
-        require(receiver != address(0), "zero receiver");
+        require(_amount > 0, "zero amount");
+        require(_receiver != address(0), "zero receiver");
+        require(callDeadline == 0, "debt called");
+        require(_amount <= totalCollateral, "insufficient collateral");
 
         _accrueInterest();
-        require(callDeadline == 0, "debt called");
-        require(amount <= totalCollateral, "insufficient collateral");
 
-        totalCollateral -= amount;
+        totalCollateral -= _amount;
         require(
             _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
-        IERC20(COLLATERAL_ASSET).safeTransfer(receiver, amount);
+        IERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
 
-        emit CollateralWithdrawn(msg.sender, receiver, amount, totalCollateral);
+        emit CollateralWithdrawn(
+            msg.sender,
+            _receiver,
+            _amount,
+            totalCollateral
+        );
     }
 
-    function callDebt(uint256 amount) external onlyManagement {
-        require(amount > 0, "zero amount");
+    /// @notice Calls debt and starts the repayment deadline window.
+    /// @param _amount The additional amount of debt to call.
+    function callDebt(uint256 _amount) external onlyManagement {
+        require(_amount > 0, "zero amount");
 
         _accrueInterest();
 
-        uint256 currentDebt = debtAmount;
-        require(currentDebt > 0, "no debt");
+        uint256 _currentDebt = debtAmount;
+        require(_currentDebt > 0, "no debt");
 
-        if (calledDebtAmount > currentDebt) calledDebtAmount = currentDebt;
-
-        uint256 updatedCalledDebt = Math.min(
-            currentDebt,
-            calledDebtAmount + amount
+        uint256 _updatedCalledDebt = Math.min(
+            _currentDebt,
+            calledDebtAmount + _amount
         );
-        require(updatedCalledDebt > calledDebtAmount, "already fully called");
+        require(_updatedCalledDebt > calledDebtAmount, "already fully called");
 
-        calledDebtAmount = updatedCalledDebt;
+        calledDebtAmount = _updatedCalledDebt;
         callDeadline = block.timestamp + CALL_DURATION;
 
-        emit DebtCalled(msg.sender, amount, updatedCalledDebt, callDeadline);
+        emit DebtCalled(msg.sender, _amount, _updatedCalledDebt, callDeadline);
     }
 
+    /// @notice Clears an active debt call after the called amount has been satisfied.
     function clearCall() external onlyManagement {
         _accrueInterest();
         require(calledDebtAmount == 0, "called debt active");
         _clearCallState();
     }
 
+    /// @notice Repays debt and seizes collateral from a liquidatable position.
+    /// @param _repayAmount The requested repayment amount.
+    /// @param _receiver The address that receives seized collateral.
+    /// @return actualRepaid The amount of debt actually repaid.
+    /// @return collateralSeized The amount of collateral transferred to the receiver.
     function liquidate(
-        uint256 repayAmount,
-        address receiver
+        uint256 _repayAmount,
+        address _receiver
     ) external returns (uint256 actualRepaid, uint256 collateralSeized) {
-        require(repayAmount > 0, "zero amount");
-        require(receiver != address(0), "zero receiver");
+        require(_repayAmount > 0, "zero amount");
+        require(_receiver != address(0), "zero receiver");
         require(
             msg.sender == TokenizedStrategy.management() ||
                 liquidators[msg.sender],
@@ -242,21 +278,21 @@ contract Strategy is BaseHealthCheck {
 
         _accrueInterest();
 
-        uint256 currentDebt = debtAmount;
-        require(currentDebt > 0, "no debt");
+        uint256 _currentDebt = debtAmount;
+        require(_currentDebt > 0, "no debt");
 
-        bool callOverdue = _isCallOverdue();
-        bool solvent = _isSolventAt(currentDebt, totalCollateral);
-        require(callOverdue || !solvent, "not liquidatable");
+        bool _callOverdue = _isCallOverdue();
+        bool _solvent = _isSolventAt(_currentDebt, totalCollateral);
+        require(_callOverdue || !_solvent, "not liquidatable");
 
-        uint256 maxRepay = currentDebt;
-        if (callOverdue && solvent) {
-            maxRepay = calledDebtAmount;
+        uint256 _maxRepay = _currentDebt;
+        if (_callOverdue && _solvent) {
+            _maxRepay = calledDebtAmount;
         }
 
-        uint256 collateralValue = _collateralValue(totalCollateral);
-        maxRepay = Math.min(maxRepay, collateralValue);
-        actualRepaid = Math.min(repayAmount, maxRepay);
+        uint256 _positionCollateralValue = _collateralValue(totalCollateral);
+        _maxRepay = Math.min(_maxRepay, _positionCollateralValue);
+        actualRepaid = Math.min(_repayAmount, _maxRepay);
         require(actualRepaid > 0, "repay too small");
 
         collateralSeized = _loanToCollateral(actualRepaid);
@@ -270,11 +306,11 @@ contract Strategy is BaseHealthCheck {
         _applyRepayment(actualRepaid);
         _syncCallState(debtAmount);
 
-        IERC20(COLLATERAL_ASSET).safeTransfer(receiver, collateralSeized);
+        IERC20(COLLATERAL_ASSET).safeTransfer(_receiver, collateralSeized);
 
         emit Liquidated(
             msg.sender,
-            receiver,
+            _receiver,
             actualRepaid,
             collateralSeized,
             debtAmount,
@@ -282,115 +318,127 @@ contract Strategy is BaseHealthCheck {
         );
     }
 
+    ////////////////////////////////////////////////////////////////
+    //                        VIEW FUNCTIONS                       //
+    ////////////////////////////////////////////////////////////////
+
+    /// @notice Returns current debt including accrued but unapplied interest.
     function totalDebt() public view returns (uint256) {
         return debtAmount + _previewInterest();
     }
 
+    /// @notice Returns whether the current position is within the configured LLTV.
     function isSolvent() public view returns (bool) {
         return _isSolventAt(totalDebt(), totalCollateral);
     }
 
+    /// @notice Returns whether the current position is solvent and not overdue.
     function isHealthy() public view returns (bool) {
         return isSolvent() && !_isCallOverdue();
     }
 
+    /// @notice Returns the current loan-to-value ratio scaled by `1e18`.
     function currentLtv() public view returns (uint256) {
-        uint256 currentDebt = totalDebt();
-        if (currentDebt == 0) return 0;
+        uint256 _currentDebt = totalDebt();
+        if (_currentDebt == 0) return 0;
 
-        uint256 collateralValue = _collateralValue(totalCollateral);
-        if (collateralValue == 0) return type(uint256).max;
+        uint256 _positionCollateralValue = _collateralValue(totalCollateral);
+        if (_positionCollateralValue == 0) return type(uint256).max;
 
-        return Math.mulDiv(currentDebt, LLTV_SCALE, collateralValue);
+        return Math.mulDiv(_currentDebt, LLTV_SCALE, _positionCollateralValue);
     }
 
+    ////////////////////////////////////////////////////////////////
+    //               TOKENIZED STRATEGY FUNCTIONS                 //
+    ////////////////////////////////////////////////////////////////
+
+    /// @notice Returns the deposit limit for an address.
     function availableDepositLimit(
-        address owner
+        address _owner
     ) public view override returns (uint256) {
         if (TokenizedStrategy.isShutdown()) return 0;
-        if (allowed[owner]) return type(uint256).max;
+        if (allowed[_owner]) return type(uint256).max;
         return 0;
     }
 
+    /// @notice Returns the amount of idle base asset currently withdrawable from the strategy.
     function availableWithdrawLimit(
-        address
+        address _owner
     ) public view override returns (uint256) {
+        _owner;
         return asset.balanceOf(address(this));
     }
 
-    function rescue(address token, address receiver) external onlyManagement {
-        require(receiver != address(0), "zero receiver");
-        require(token != address(asset), "cannot rescue asset");
-        require(token != COLLATERAL_ASSET, "cannot rescue collateral");
-
-        IERC20(token).safeTransfer(
-            receiver,
-            IERC20(token).balanceOf(address(this))
-        );
+    function _deployFunds(uint256 _amount) internal pure override {
+        _amount;
     }
 
-    function _deployFunds(uint256) internal override {}
-
-    function _freeFunds(uint256) internal override {}
+    function _freeFunds(uint256 _amount) internal pure override {
+        _amount;
+    }
 
     function _harvestAndReport() internal view override returns (uint256) {
-        uint256 currentDebt = totalDebt();
-        uint256 totalAssets = asset.balanceOf(address(this));
+        uint256 _currentDebt = totalDebt();
+        uint256 _totalAssets = asset.balanceOf(address(this));
 
-        if (currentDebt == 0 || totalCollateral == 0) return totalAssets;
+        if (_currentDebt == 0 || totalCollateral == 0) return _totalAssets;
 
         return
-            totalAssets +
-            Math.min(currentDebt, _collateralValue(totalCollateral));
+            _totalAssets +
+            Math.min(_currentDebt, _collateralValue(totalCollateral));
     }
 
+    ////////////////////////////////////////////////////////////////
+    //                        INTERNAL FUNCTIONS                   //
+    ////////////////////////////////////////////////////////////////
+
     function _accrueInterest() internal {
-        uint256 accruedInterest = _previewInterest();
-        if (accruedInterest > 0) debtAmount += accruedInterest;
+        uint256 _accruedInterest = _previewInterest();
+        if (_accruedInterest > 0) debtAmount += _accruedInterest;
 
         lastAccrualTime = block.timestamp;
     }
 
-    function _applyRepayment(uint256 amount) internal {
-        uint256 calledReduction = Math.min(calledDebtAmount, amount);
-        if (calledReduction > 0) calledDebtAmount -= calledReduction;
+    function _applyRepayment(uint256 _amount) internal {
+        uint256 _calledReduction = Math.min(calledDebtAmount, _amount);
+        if (_calledReduction > 0) calledDebtAmount -= _calledReduction;
 
-        uint256 remaining = amount;
-        uint256 interestOutstanding = debtAmount - principalDebt;
-        uint256 interestReduction = Math.min(interestOutstanding, remaining);
-        remaining -= interestReduction;
+        uint256 _remaining = _amount;
+        uint256 _interestOutstanding = debtAmount - principalDebt;
+        uint256 _interestReduction = Math.min(_interestOutstanding, _remaining);
+        _remaining -= _interestReduction;
 
-        if (remaining > 0) principalDebt -= remaining;
+        if (_remaining > 0) principalDebt -= _remaining;
 
-        debtAmount -= amount;
+        debtAmount -= _amount;
     }
 
-    function _syncCallState(uint256 currentDebt) internal {
-        if (calledDebtAmount > currentDebt) calledDebtAmount = currentDebt;
+    function _syncCallState(uint256 _currentDebt) internal {
+        if (calledDebtAmount > _currentDebt) calledDebtAmount = _currentDebt;
     }
 
     function _clearCallState() internal {
-        bool hadCall = calledDebtAmount != 0 || callDeadline != 0;
+        bool _hadCall = calledDebtAmount != 0 || callDeadline != 0;
 
         calledDebtAmount = 0;
         callDeadline = 0;
 
-        if (hadCall) emit CallCleared(msg.sender);
+        if (_hadCall) emit CallCleared(msg.sender);
     }
 
     function _isSolventAt(
-        uint256 currentDebt,
-        uint256 collateralAmount
+        uint256 _currentDebt,
+        uint256 _collateralAmount
     ) internal view returns (bool) {
-        if (currentDebt == 0) return true;
-        if (collateralAmount == 0) return false;
+        if (_currentDebt == 0) return true;
+        if (_collateralAmount == 0) return false;
 
-        uint256 maxDebt = Math.mulDiv(
-            _collateralValue(collateralAmount),
+        uint256 _maxDebt = Math.mulDiv(
+            _collateralValue(_collateralAmount),
             LLTV,
             LLTV_SCALE
         );
-        return currentDebt <= maxDebt;
+        return _currentDebt <= _maxDebt;
     }
 
     function _isCallOverdue() internal view returns (bool) {
@@ -403,36 +451,48 @@ contract Strategy is BaseHealthCheck {
     function _previewInterest() internal view returns (uint256) {
         if (principalDebt == 0) return 0;
 
-        uint256 elapsed = block.timestamp - lastAccrualTime;
-        if (elapsed == 0) return 0;
+        uint256 _elapsed = block.timestamp - lastAccrualTime;
+        if (_elapsed == 0) return 0;
 
-        uint256 annualInterest = Math.mulDiv(
+        uint256 _annualInterest = Math.mulDiv(
             principalDebt,
             FIXED_RATE,
             MAX_BPS
         );
-        return Math.mulDiv(annualInterest, elapsed, SECONDS_PER_YEAR);
+        return Math.mulDiv(_annualInterest, _elapsed, SECONDS_PER_YEAR);
     }
 
     function _collateralValue(
-        uint256 collateralAmount
+        uint256 _collateralAmount
     ) internal view returns (uint256) {
-        if (collateralAmount == 0) return 0;
+        if (_collateralAmount == 0) return 0;
 
-        uint256 price = ORACLE.price();
-        require(price > 0, "zero oracle price");
-
-        return Math.mulDiv(collateralAmount, price, ORACLE_PRICE_SCALE);
+        return Math.mulDiv(_collateralAmount, _price(), ORACLE_PRICE_SCALE);
     }
 
     function _loanToCollateral(
-        uint256 loanAmount
+        uint256 _loanAmount
     ) internal view returns (uint256) {
-        if (loanAmount == 0) return 0;
+        if (_loanAmount == 0) return 0;
 
-        uint256 price = ORACLE.price();
-        require(price > 0, "zero oracle price");
+        return Math.mulDiv(_loanAmount, ORACLE_PRICE_SCALE, _price());
+    }
 
-        return Math.mulDiv(loanAmount, ORACLE_PRICE_SCALE, price);
+    function _price() internal view returns (uint256) {
+        uint256 _oraclePrice = ORACLE.price();
+        require(_oraclePrice > 0, "zero oracle price");
+        return _oraclePrice;
+    }
+
+    /// @notice Rescues unrelated tokens accidentally sent to the strategy.
+    function rescue(address _token, address _receiver) external onlyManagement {
+        require(_receiver != address(0), "zero receiver");
+        require(_token != address(asset), "cannot rescue asset");
+        require(_token != COLLATERAL_ASSET, "cannot rescue collateral");
+
+        IERC20(_token).safeTransfer(
+            _receiver,
+            IERC20(_token).balanceOf(address(this))
+        );
     }
 }
