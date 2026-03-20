@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.23;
 
-import {Strategy, ERC20} from "./Strategy.sol";
+import {Strategy} from "./Strategy.sol";
 import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
 
 contract StrategyFactory {
-    event NewStrategy(address indexed strategy, address indexed asset);
+    event NewStrategy(
+        address indexed strategy,
+        address indexed asset,
+        address indexed borrower,
+        address collateralAsset
+    );
 
     address public immutable emergencyAdmin;
 
@@ -13,8 +18,8 @@ contract StrategyFactory {
     address public performanceFeeRecipient;
     address public keeper;
 
-    /// @notice Track the deployments. asset => pool => strategy
-    mapping(address => address) public deployments;
+    mapping(bytes32 => address) public deployments;
+    mapping(address => bool) public deployedStrategies;
 
     constructor(
         address _management,
@@ -28,32 +33,103 @@ contract StrategyFactory {
         emergencyAdmin = _emergencyAdmin;
     }
 
-    /**
-     * @notice Deploy a new Strategy.
-     * @param _asset The underlying asset for the strategy to use.
-     * @return . The address of the new strategy.
-     */
     function newStrategy(
         address _asset,
-        string calldata _name
+        string calldata _name,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _fixedRateBps,
+        uint256 _callDuration
     ) external virtual returns (address) {
-        // tokenized strategies available setters.
+        bytes32 key = deploymentKey(
+            _asset,
+            _borrower,
+            _collateralAsset,
+            _oracle,
+            _lltv,
+            _fixedRateBps,
+            _callDuration
+        );
+        require(deployments[key] == address(0), "strategy exists");
+
         IStrategyInterface _newStrategy = IStrategyInterface(
-            address(new Strategy(_asset, _name))
+            address(
+                new Strategy(
+                    _asset,
+                    _name,
+                    _borrower,
+                    _collateralAsset,
+                    _oracle,
+                    _lltv,
+                    _fixedRateBps,
+                    _callDuration
+                )
+            )
         );
 
         _newStrategy.setPerformanceFeeRecipient(performanceFeeRecipient);
-
         _newStrategy.setKeeper(keeper);
-
         _newStrategy.setPendingManagement(management);
-
         _newStrategy.setEmergencyAdmin(emergencyAdmin);
 
-        emit NewStrategy(address(_newStrategy), _asset);
+        deployments[key] = address(_newStrategy);
+        deployedStrategies[address(_newStrategy)] = true;
 
-        deployments[_asset] = address(_newStrategy);
+        emit NewStrategy(
+            address(_newStrategy),
+            _asset,
+            _borrower,
+            _collateralAsset
+        );
         return address(_newStrategy);
+    }
+
+    function deploymentKey(
+        address _asset,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _fixedRateBps,
+        uint256 _callDuration
+    ) public pure returns (bytes32) {
+        return
+            keccak256(
+                abi.encode(
+                    _asset,
+                    _borrower,
+                    _collateralAsset,
+                    _oracle,
+                    _lltv,
+                    _fixedRateBps,
+                    _callDuration
+                )
+            );
+    }
+
+    function deploymentFor(
+        address _asset,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _fixedRateBps,
+        uint256 _callDuration
+    ) external view returns (address) {
+        return
+            deployments[
+                deploymentKey(
+                    _asset,
+                    _borrower,
+                    _collateralAsset,
+                    _oracle,
+                    _lltv,
+                    _fixedRateBps,
+                    _callDuration
+                )
+            ];
     }
 
     function setAddresses(
@@ -70,7 +146,6 @@ contract StrategyFactory {
     function isDeployedStrategy(
         address _strategy
     ) external view returns (bool) {
-        address _asset = IStrategyInterface(_strategy).asset();
-        return deployments[_asset] == _strategy;
+        return deployedStrategies[_strategy];
     }
 }

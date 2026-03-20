@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.23;
 
-import "forge-std/console2.sol";
 import {Test} from "forge-std/Test.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {Strategy, ERC20} from "../../Strategy.sol";
+import {ERC20} from "../../Strategy.sol";
 import {StrategyFactory} from "../../StrategyFactory.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
+import {IMorphoOracle} from "../../interfaces/IMorphoOracle.sol";
 
-// Inherit the events so they can be checked if desired.
 import {IEvents} from "@tokenized-strategy/interfaces/IEvents.sol";
 
 interface IFactory {
@@ -20,43 +20,47 @@ interface IFactory {
 }
 
 contract Setup is Test, IEvents {
-    // Contract instances that we will use repeatedly.
     ERC20 public asset;
+    ERC20 public collateral;
     IStrategyInterface public strategy;
-
     StrategyFactory public strategyFactory;
+    IMorphoOracle public collateralOracle;
 
     mapping(string => address) public tokenAddrs;
 
-    // Addresses for different roles we will use repeatedly.
     address public user = address(10);
+    address public borrower = address(11);
+    address public liquidator = address(12);
+    address public stranger = address(13);
     address public keeper = address(4);
     address public management = address(1);
     address public performanceFeeRecipient = address(3);
     address public emergencyAdmin = address(5);
 
-    // Address of the real deployed Factory
     address public factory;
 
-    // Integer variables that will be used repeatedly.
     uint256 public decimals;
     uint256 public MAX_BPS = 10_000;
-
-    // Fuzz from $0.01 of 1e6 stable coins up to 1 trillion of a 1e18 coin
-    uint256 public maxFuzzAmount = 1e30;
-    uint256 public minFuzzAmount = 10_000;
-
-    // Default profit max unlock time is set for 10 days
+    uint256 public maxFuzzAmount = 1_000_000e18;
+    uint256 public minFuzzAmount = 1e18;
     uint256 public profitMaxUnlockTime = 10 days;
 
+    uint256 public lltv = 915e15;
+    uint256 public targetLtv = 9e17;
+    uint256 public fixedRate = 400;
+    uint256 public callDuration = 1 weeks;
+
     function setUp() public virtual {
+        vm.createSelectFork(vm.envString("ETH_RPC_URL"));
         _setTokenAddrs();
 
-        // Set asset
-        asset = ERC20(tokenAddrs["DAI"]);
-
-        // Set decimals
+        asset = ERC20(tokenAddrs["USDC"]);
+        collateral = ERC20(tokenAddrs["SIUSD"]);
         decimals = asset.decimals();
+
+        collateralOracle = IMorphoOracle(
+            0xd2cC46b9B2D761502eF933320ecf0268EC0dfa6d
+        );
 
         strategyFactory = new StrategyFactory(
             management,
@@ -65,27 +69,34 @@ contract Setup is Test, IEvents {
             emergencyAdmin
         );
 
-        // Deploy strategy and set variables
         strategy = IStrategyInterface(setUpStrategy());
-
         factory = strategy.FACTORY();
 
-        // label all the used addresses for traces
+        vm.label(user, "user");
+        vm.label(borrower, "borrower");
+        vm.label(liquidator, "liquidator");
         vm.label(keeper, "keeper");
         vm.label(factory, "factory");
         vm.label(address(asset), "asset");
+        vm.label(address(collateral), "collateral");
+        vm.label(address(collateralOracle), "collateralOracle");
         vm.label(management, "management");
         vm.label(address(strategy), "strategy");
         vm.label(performanceFeeRecipient, "performanceFeeRecipient");
     }
 
     function setUpStrategy() public returns (address) {
-        // we save the strategy as a IStrategyInterface to give it the needed interface
         IStrategyInterface _strategy = IStrategyInterface(
             address(
                 strategyFactory.newStrategy(
                     address(asset),
-                    "Tokenized Strategy"
+                    "Vault To Vault Strategy",
+                    borrower,
+                    address(collateral),
+                    address(collateralOracle),
+                    lltv,
+                    fixedRate,
+                    callDuration
                 )
             )
         );
@@ -96,11 +107,66 @@ contract Setup is Test, IEvents {
         return address(_strategy);
     }
 
+    function setAllowed(address owner, bool isAllowed) public {
+        vm.prank(management);
+        strategy.setAllowed(owner, isAllowed);
+    }
+
+    function setLiquidator(address who, bool isAllowed) public {
+        vm.prank(management);
+        strategy.setLiquidator(who, isAllowed);
+    }
+
+    function toAssetAmount(uint256 wholeAmount) public view returns (uint256) {
+        return wholeAmount * 10 ** asset.decimals();
+    }
+
+    function toCollateralAmount(
+        uint256 wholeAmount
+    ) public view returns (uint256) {
+        return wholeAmount * 10 ** collateral.decimals();
+    }
+
+    function collateralValue(
+        uint256 collateralAmount
+    ) public view returns (uint256) {
+        return Math.mulDiv(collateralAmount, collateralOracle.price(), 1e36);
+    }
+
+    function borrowAmountForLtv(
+        uint256 collateralAmount,
+        uint256 targetLtvRatio
+    ) public view returns (uint256) {
+        return
+            Math.mulDiv(
+                collateralValue(collateralAmount),
+                targetLtvRatio,
+                1e18
+            );
+    }
+
+    function defaultLiquidityAmount() public view returns (uint256) {
+        return toAssetAmount(200_000);
+    }
+
+    function defaultCollateralAmount() public view returns (uint256) {
+        return toCollateralAmount(100_000);
+    }
+
+    function defaultBorrowAmount(
+        uint256 collateralAmount
+    ) public view returns (uint256) {
+        return borrowAmountForLtv(collateralAmount, targetLtv);
+    }
+
     function depositIntoStrategy(
         IStrategyInterface _strategy,
         address _user,
         uint256 _amount
     ) public {
+        vm.prank(management);
+        _strategy.setAllowed(_user, true);
+
         vm.prank(_user);
         asset.approve(address(_strategy), _amount);
 
@@ -117,7 +183,15 @@ contract Setup is Test, IEvents {
         depositIntoStrategy(_strategy, _user, _amount);
     }
 
-    // For checking the amounts in the strategy
+    function postCollateral(uint256 amount) public {
+        airdrop(collateral, borrower, amount);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(strategy), amount);
+        strategy.postCollateral(amount);
+        vm.stopPrank();
+    }
+
     function checkStrategyTotals(
         IStrategyInterface _strategy,
         uint256 _totalAssets,
@@ -144,7 +218,6 @@ contract Setup is Test, IEvents {
     function setFees(uint16 _protocolFee, uint16 _performanceFee) public {
         address gov = IFactory(factory).governance();
 
-        // Need to make sure there is a protocol fee recipient to set the fee.
         vm.prank(gov);
         IFactory(factory).set_protocol_fee_recipient(gov);
 
@@ -163,5 +236,6 @@ contract Setup is Test, IEvents {
         tokenAddrs["USDT"] = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
         tokenAddrs["DAI"] = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
         tokenAddrs["USDC"] = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+        tokenAddrs["SIUSD"] = 0xDBDC1Ef57537E34680B898E1FEBD3D68c7389bCB;
     }
 }

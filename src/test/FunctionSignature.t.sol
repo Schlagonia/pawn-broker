@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.23;
 
-import "forge-std/console2.sol";
 import {Setup, ERC20, IStrategyInterface} from "./utils/Setup.sol";
 
 contract FunctionSignatureTest is Setup {
-    function setUp() public virtual override {
-        super.setUp();
-    }
-
-    // This test should not be overridden and checks that
-    // no function signature collisions occurred from the custom functions.
-    // Does not check functions that are strategy dependant and will be checked in other tests
     function test_functionCollisions() public {
-        uint256 wad = 1e18;
+        uint256 wad = 10 ** asset.decimals();
         vm.expectRevert("initialized");
         strategy.initialize(
             address(asset),
@@ -23,7 +15,6 @@ contract FunctionSignatureTest is Setup {
             keeper
         );
 
-        // Check view functions
         assertEq(strategy.convertToAssets(wad), wad, "convert to assets");
         assertEq(strategy.convertToShares(wad), wad, "convert to shares");
         assertEq(strategy.previewDeposit(wad), wad, "preview deposit");
@@ -48,7 +39,14 @@ contract FunctionSignatureTest is Setup {
         );
         assertEq(strategy.decimals(), asset.decimals(), "decimals");
 
-        // Assure modifiers are working
+        assertEq(strategy.totalCollateral(), 0);
+        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.callDeadline(), 0);
+        assertEq(strategy.totalDebt(), 0);
+        assertTrue(strategy.isSolvent());
+        assertTrue(strategy.isHealthy());
+        assertEq(strategy.currentLtv(), 0);
+
         vm.startPrank(user);
         vm.expectRevert("!management");
         strategy.setPendingManagement(user);
@@ -64,9 +62,14 @@ contract FunctionSignatureTest is Setup {
         strategy.setPerformanceFeeRecipient(user);
         vm.expectRevert("!management");
         strategy.setProfitMaxUnlockTime(1);
+        vm.expectRevert("!management");
+        strategy.setAllowed(user, true);
+        vm.expectRevert("!management");
+        strategy.callDebt(1);
+        vm.expectRevert("not borrower");
+        strategy.postCollateral(1);
         vm.stopPrank();
 
-        // Assure checks are being used
         vm.startPrank(strategy.management());
         vm.expectRevert("Cannot be self");
         strategy.setPerformanceFeeRecipient(address(strategy));
@@ -74,7 +77,6 @@ contract FunctionSignatureTest is Setup {
         strategy.setProfitMaxUnlockTime(type(uint256).max);
         vm.stopPrank();
 
-        // Mint some shares to the user
         airdrop(ERC20(address(strategy)), user, wad);
         assertEq(strategy.balanceOf(address(user)), wad, "balance");
         vm.prank(user);

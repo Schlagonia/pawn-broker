@@ -1,78 +1,56 @@
-pragma solidity ^0.8.18;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.23;
 
-import "forge-std/console2.sol";
-import {Setup, ERC20, IStrategyInterface} from "./utils/Setup.sol";
+import {Setup, IStrategyInterface} from "./utils/Setup.sol";
 
 contract ShutdownTest is Setup {
-    function setUp() public virtual override {
-        super.setUp();
-    }
+    function test_shutdownBlocksNewDeposits() public {
+        uint256 amount = toAssetAmount(100_000);
 
-    function test_shutdownCanWithdraw(uint256 _amount) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+        airdrop(asset, user, amount);
+        setAllowed(user, true);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
-
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
-
-        // Earn Interest
-        skip(1 days);
-
-        // Shutdown the strategy
         vm.prank(emergencyAdmin);
         strategy.shutdownStrategy();
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
-
-        // Make sure we can still withdraw the full amount
-        uint256 balanceBefore = asset.balanceOf(user);
-
-        // Withdraw all funds
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        assertGe(
-            asset.balanceOf(user),
-            balanceBefore + _amount,
-            "!final balance"
-        );
+        vm.startPrank(user);
+        asset.approve(address(strategy), amount);
+        vm.expectRevert();
+        strategy.deposit(amount, user);
+        vm.stopPrank();
     }
 
-    function test_emergencyWithdraw_maxUint(uint256 _amount) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+    function test_shutdownBlocksNewBorrowButAllowsRepayAndWithdraw() public {
+        uint256 liquidity = defaultLiquidityAmount();
+        uint256 collateralAmount = defaultCollateralAmount();
+        uint256 borrowAmount = defaultBorrowAmount(collateralAmount);
+        uint256 extraBorrowAmount = toAssetAmount(1);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
+        mintAndDepositIntoStrategy(strategy, user, liquidity);
+        postCollateral(collateralAmount);
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
 
-        // Earn Interest
-        skip(1 days);
-
-        // Shutdown the strategy
         vm.prank(emergencyAdmin);
         strategy.shutdownStrategy();
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+        vm.prank(borrower);
+        vm.expectRevert("shutdown");
+        strategy.borrow(extraBorrowAmount, borrower);
 
-        // should be able to pass uint 256 max and not revert.
-        vm.prank(emergencyAdmin);
-        strategy.emergencyWithdraw(type(uint256).max);
+        uint256 repayAmount = strategy.totalDebt();
 
-        // Make sure we can still withdraw the full amount
-        uint256 balanceBefore = asset.balanceOf(user);
+        airdrop(asset, borrower, repayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), repayAmount);
+        strategy.repay(repayAmount);
+        strategy.withdrawCollateral(collateralAmount, borrower);
+        vm.stopPrank();
 
-        // Withdraw all funds
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        assertGe(
-            asset.balanceOf(user),
-            balanceBefore + _amount,
-            "!final balance"
-        );
+        assertEq(strategy.totalDebt(), 0);
+        assertEq(strategy.totalCollateral(), 0);
+        assertTrue(strategy.isHealthy());
+        assertEq(strategy.currentLtv(), 0);
     }
-
-    // TODO: Add tests for any emergency function added.
 }

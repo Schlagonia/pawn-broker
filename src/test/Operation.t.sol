@@ -1,199 +1,150 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.23;
 
-import "forge-std/console2.sol";
 import {Setup, ERC20, IStrategyInterface} from "./utils/Setup.sol";
 
 contract OperationTest is Setup {
-    function setUp() public virtual override {
-        super.setUp();
-    }
-
     function test_setupStrategyOK() public {
-        console2.log("address of strategy", address(strategy));
-        assertTrue(address(0) != address(strategy));
+        assertTrue(address(strategy) != address(0));
         assertEq(strategy.asset(), address(asset));
         assertEq(strategy.management(), management);
         assertEq(strategy.performanceFeeRecipient(), performanceFeeRecipient);
         assertEq(strategy.keeper(), keeper);
-        // TODO: add additional check on strat params
+        assertEq(strategy.totalCollateral(), 0);
+        assertEq(strategy.totalDebt(), 0);
+        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.callDeadline(), 0);
+        assertTrue(strategy.isSolvent());
+        assertTrue(strategy.isHealthy());
+        assertEq(strategy.currentLtv(), 0);
     }
 
-    function test_operation(uint256 _amount) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+    function test_onlyAllowedCanDeposit() public {
+        uint256 amount = toAssetAmount(100_000);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
+        airdrop(asset, stranger, amount);
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+        vm.startPrank(stranger);
+        asset.approve(address(strategy), amount);
+        vm.expectRevert();
+        strategy.deposit(amount, stranger);
+        vm.stopPrank();
 
-        // Earn Interest
-        skip(1 days);
+        setAllowed(stranger, true);
 
-        // Report profit
-        vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        vm.startPrank(stranger);
+        strategy.deposit(amount, stranger);
+        vm.stopPrank();
 
-        // Check return Values
-        assertGe(profit, 0, "!profit");
-        assertEq(loss, 0, "!loss");
-
-        skip(strategy.profitMaxUnlockTime());
-
-        uint256 balanceBefore = asset.balanceOf(user);
-
-        // Withdraw all funds
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        assertGe(
-            asset.balanceOf(user),
-            balanceBefore + _amount,
-            "!final balance"
-        );
+        assertEq(strategy.totalAssets(), amount);
     }
 
-    function test_profitableReport(
-        uint256 _amount,
-        uint16 _profitFactor
-    ) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
-        _profitFactor = uint16(bound(uint256(_profitFactor), 10, MAX_BPS));
+    function test_borrowRepayWithdrawFlow() public {
+        uint256 liquidity = defaultLiquidityAmount();
+        uint256 collateralAmount = defaultCollateralAmount();
+        uint256 borrowAmount = defaultBorrowAmount(collateralAmount);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
+        mintAndDepositIntoStrategy(strategy, user, liquidity);
+        postCollateral(collateralAmount);
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
 
-        // Earn Interest
-        skip(1 days);
+        assertEq(strategy.totalCollateral(), collateralAmount);
+        assertEq(strategy.totalDebt(), borrowAmount);
+        assertLe(strategy.currentLtv(), targetLtv);
+        assertTrue(strategy.isHealthy());
 
-        // TODO: implement logic to simulate earning interest.
-        uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
-        airdrop(asset, address(strategy), toAirdrop);
+        skip(30 days);
 
-        // Report profit
-        vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        uint256 repayAmount = strategy.totalDebt();
 
-        // Check return Values
-        assertGe(profit, toAirdrop, "!profit");
-        assertEq(loss, 0, "!loss");
+        airdrop(asset, borrower, repayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), repayAmount);
+        strategy.repay(repayAmount);
+        strategy.withdrawCollateral(collateralAmount, borrower);
+        vm.stopPrank();
 
-        skip(strategy.profitMaxUnlockTime());
-
-        uint256 balanceBefore = asset.balanceOf(user);
-
-        // Withdraw all funds
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        assertGe(
-            asset.balanceOf(user),
-            balanceBefore + _amount,
-            "!final balance"
-        );
+        assertEq(strategy.totalCollateral(), 0);
+        assertEq(strategy.totalDebt(), 0);
+        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.currentLtv(), 0);
+        assertTrue(strategy.isHealthy());
     }
 
-    function test_profitableReport_withFees(
-        uint256 _amount,
-        uint16 _profitFactor
-    ) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
-        _profitFactor = uint16(bound(uint256(_profitFactor), 10, MAX_BPS));
+    function test_callDebtBlocksBorrowAndWithdrawUntilCleared() public {
+        uint256 liquidity = defaultLiquidityAmount();
+        uint256 collateralAmount = defaultCollateralAmount();
+        uint256 borrowAmount = defaultBorrowAmount(collateralAmount);
+        uint256 callAmount = borrowAmount / 5;
+        uint256 extraBorrowAmount = toAssetAmount(1);
+        uint256 collateralWithdrawAmount = toCollateralAmount(1);
 
-        // Set protocol fee to 0 and perf fee to 10%
-        setFees(0, 1_000);
+        mintAndDepositIntoStrategy(strategy, user, liquidity);
+        postCollateral(collateralAmount);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
 
-        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+        vm.prank(management);
+        strategy.callDebt(callAmount);
 
-        // Earn Interest
-        skip(1 days);
+        vm.prank(borrower);
+        vm.expectRevert("debt called");
+        strategy.borrow(extraBorrowAmount, borrower);
 
-        // TODO: implement logic to simulate earning interest.
-        uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
-        airdrop(asset, address(strategy), toAirdrop);
+        vm.prank(borrower);
+        vm.expectRevert("debt called");
+        strategy.withdrawCollateral(collateralWithdrawAmount, borrower);
 
-        // Report profit
-        vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        airdrop(asset, borrower, callAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), callAmount);
+        strategy.repay(callAmount);
+        vm.expectRevert("debt called");
+        strategy.borrow(extraBorrowAmount, borrower);
+        vm.expectRevert("debt called");
+        strategy.withdrawCollateral(collateralWithdrawAmount, borrower);
+        vm.stopPrank();
 
-        // Check return Values
-        assertGe(profit, toAirdrop, "!profit");
-        assertEq(loss, 0, "!loss");
+        assertEq(strategy.calledDebtAmount(), 0);
+        assertGt(strategy.callDeadline(), 0);
 
-        skip(strategy.profitMaxUnlockTime());
+        vm.prank(management);
+        strategy.clearCall();
 
-        // Get the expected fee
-        uint256 expectedShares = (profit * 1_000) / MAX_BPS;
-
-        assertEq(strategy.balanceOf(performanceFeeRecipient), expectedShares);
-
-        uint256 balanceBefore = asset.balanceOf(user);
-
-        // Withdraw all funds
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        assertGe(
-            asset.balanceOf(user),
-            balanceBefore + _amount,
-            "!final balance"
-        );
-
-        vm.prank(performanceFeeRecipient);
-        strategy.redeem(
-            expectedShares,
-            performanceFeeRecipient,
-            performanceFeeRecipient
-        );
-
-        checkStrategyTotals(strategy, 0, 0, 0);
-
-        assertGe(
-            asset.balanceOf(performanceFeeRecipient),
-            expectedShares,
-            "!perf fee out"
-        );
+        vm.prank(borrower);
+        strategy.borrow(extraBorrowAmount, borrower);
     }
 
-    function test_tendTrigger(uint256 _amount) public {
-        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+    function test_overdueCallCanBeLiquidated() public {
+        uint256 liquidity = defaultLiquidityAmount();
+        uint256 collateralAmount = defaultCollateralAmount();
+        uint256 borrowAmount = defaultBorrowAmount(collateralAmount);
+        uint256 callAmount = borrowAmount / 5;
 
-        (bool trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
+        mintAndDepositIntoStrategy(strategy, user, liquidity);
+        postCollateral(collateralAmount);
 
-        // Deposit into strategy
-        mintAndDepositIntoStrategy(strategy, user, _amount);
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
 
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
+        vm.prank(management);
+        strategy.callDebt(callAmount);
 
-        // Skip some time
-        skip(1 days);
+        skip(callDuration + 1);
 
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
+        setLiquidator(liquidator, true);
+        airdrop(asset, liquidator, callAmount);
 
-        vm.prank(keeper);
-        strategy.report();
+        vm.startPrank(liquidator);
+        asset.approve(address(strategy), callAmount);
+        strategy.liquidate(callAmount, liquidator);
+        vm.stopPrank();
 
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
-
-        // Unlock Profits
-        skip(strategy.profitMaxUnlockTime());
-
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
-
-        vm.prank(user);
-        strategy.redeem(_amount, user, user);
-
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
+        assertEq(strategy.calledDebtAmount(), 0);
+        assertLt(strategy.totalCollateral(), collateralAmount);
+        assertLt(strategy.totalDebt(), borrowAmount);
     }
 }

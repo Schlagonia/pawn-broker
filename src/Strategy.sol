@@ -1,248 +1,438 @@
 // SPDX-License-Identifier: AGPL-3.0
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.23;
 
-import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {BaseHealthCheck, ERC20} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-// Import interfaces for many popular DeFi projects, or add your own!
-//import "../interfaces/<protocol>/<Interface>.sol";
+import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
+import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
 
-/**
- * The `TokenizedStrategy` variable can be used to retrieve the strategies
- * specific storage data your contract.
- *
- *       i.e. uint256 totalAssets = TokenizedStrategy.totalAssets()
- *
- * This can not be used for write functions. Any TokenizedStrategy
- * variables that need to be updated post deployment will need to
- * come from an external call from the strategies specific `management`.
- */
-
-// NOTE: To implement permissioned functions you can use the onlyManagement, onlyEmergencyAuthorized and onlyKeepers modifiers
-
-contract Strategy is BaseStrategy {
+contract Strategy is BaseHealthCheck {
     using SafeERC20 for ERC20;
+    using SafeERC20 for IERC20;
+
+    event CollateralPosted(
+        address indexed caller,
+        uint256 amount,
+        uint256 totalCollateral
+    );
+    event CollateralWithdrawn(
+        address indexed caller,
+        address indexed receiver,
+        uint256 amount,
+        uint256 totalCollateral
+    );
+    event Borrowed(
+        address indexed caller,
+        address indexed receiver,
+        uint256 amount,
+        uint256 debtAmount
+    );
+    event Repaid(
+        address indexed caller,
+        uint256 amount,
+        uint256 debtAmount,
+        uint256 calledDebtAmount
+    );
+    event DebtCalled(
+        address indexed caller,
+        uint256 amount,
+        uint256 totalCalledDebt,
+        uint256 deadline
+    );
+    event CallCleared(address indexed caller);
+    event Liquidated(
+        address indexed caller,
+        address indexed receiver,
+        uint256 repaidAmount,
+        uint256 collateralSeized,
+        uint256 debtAmount,
+        uint256 totalCollateral
+    );
+    event UpdateAllowed(address indexed owner, bool isAllowed);
+    event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
+
+    uint256 public constant LLTV_SCALE = 1e18;
+    uint256 public constant ORACLE_PRICE_SCALE = 1e36;
+    uint256 public constant SECONDS_PER_YEAR = 365 days;
+
+    address internal immutable BORROWER;
+    address internal immutable COLLATERAL_ASSET;
+    IMorphoOracle internal immutable ORACLE;
+    uint256 internal immutable LLTV;
+    uint256 internal immutable FIXED_RATE;
+    uint256 internal immutable CALL_DURATION;
+
+    uint256 public totalCollateral;
+    uint256 internal principalDebt;
+    uint256 internal debtAmount;
+    uint256 internal lastAccrualTime;
+    uint256 public calledDebtAmount;
+    uint256 public callDeadline;
+
+    mapping(address => bool) internal allowed;
+    mapping(address => bool) internal liquidators;
 
     constructor(
         address _asset,
-        string memory _name
-    ) BaseStrategy(_asset, _name) {}
+        string memory _name,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _fixedRateBps,
+        uint256 _callDuration
+    ) BaseHealthCheck(_asset, _name) {
+        require(_borrower != address(0), "zero borrower");
+        require(_collateralAsset != address(0), "zero collateral");
+        require(_oracle != address(0), "zero oracle");
+        require(_collateralAsset != _asset, "shared asset");
+        require(_lltv > 0 && _lltv < LLTV_SCALE, "bad lltv");
+        require(_callDuration > 0, "zero call duration");
 
-    /*//////////////////////////////////////////////////////////////
-                NEEDED TO BE OVERRIDDEN BY STRATEGIST
-    //////////////////////////////////////////////////////////////*/
-
-    /**
-     * @dev Can deploy up to '_amount' of 'asset' in the yield source.
-     *
-     * This function is called at the end of a {deposit} or {mint}
-     * call. Meaning that unless a whitelist is implemented it will
-     * be entirely permissionless and thus can be sandwiched or otherwise
-     * manipulated.
-     *
-     * @param _amount The amount of 'asset' that the strategy can attempt
-     * to deposit in the yield source.
-     */
-    function _deployFunds(uint256 _amount) internal override {
-        // TODO: implement deposit logic EX:
-        //
-        //      lendingPool.deposit(address(asset), _amount ,0);
+        BORROWER = _borrower;
+        COLLATERAL_ASSET = _collateralAsset;
+        ORACLE = IMorphoOracle(_oracle);
+        LLTV = _lltv;
+        FIXED_RATE = _fixedRateBps;
+        CALL_DURATION = _callDuration;
+        lastAccrualTime = block.timestamp;
     }
 
-    /**
-     * @dev Should attempt to free the '_amount' of 'asset'.
-     *
-     * NOTE: The amount of 'asset' that is already loose has already
-     * been accounted for.
-     *
-     * This function is called during {withdraw} and {redeem} calls.
-     * Meaning that unless a whitelist is implemented it will be
-     * entirely permissionless and thus can be sandwiched or otherwise
-     * manipulated.
-     *
-     * Should not rely on asset.balanceOf(address(this)) calls other than
-     * for diff accounting purposes.
-     *
-     * Any difference between `_amount` and what is actually freed will be
-     * counted as a loss and passed on to the withdrawer. This means
-     * care should be taken in times of illiquidity. It may be better to revert
-     * if withdraws are simply illiquid so not to realize incorrect losses.
-     *
-     * @param _amount, The amount of 'asset' to be freed.
-     */
-    function _freeFunds(uint256 _amount) internal override {
-        // TODO: implement withdraw logic EX:
-        //
-        //      lendingPool.withdraw(address(asset), _amount);
+    modifier onlyBorrower() {
+        require(msg.sender == BORROWER, "not borrower");
+        _;
     }
 
-    /**
-     * @dev Internal function to harvest all rewards, redeploy any idle
-     * funds and return an accurate accounting of all funds currently
-     * held by the Strategy.
-     *
-     * This should do any needed harvesting, rewards selling, accrual,
-     * redepositing etc. to get the most accurate view of current assets.
-     *
-     * NOTE: All applicable assets including loose assets should be
-     * accounted for in this function.
-     *
-     * Care should be taken when relying on oracles or swap values rather
-     * than actual amounts as all Strategy profit/loss accounting will
-     * be done based on this returned value.
-     *
-     * This can still be called post a shutdown, a strategist can check
-     * `TokenizedStrategy.isShutdown()` to decide if funds should be
-     * redeployed or simply realize any profits/losses.
-     *
-     * @return _totalAssets A trusted and accurate account for the total
-     * amount of 'asset' the strategy currently holds including idle funds.
-     */
-    function _harvestAndReport()
-        internal
-        override
-        returns (uint256 _totalAssets)
-    {
-        // TODO: Implement harvesting logic and accurate accounting EX:
-        //
-        //      if(!TokenizedStrategy.isShutdown()) {
-        //          _claimAndSellRewards();
-        //      }
-        //      _totalAssets = aToken.balanceOf(address(this)) + asset.balanceOf(address(this));
-        //
-        _totalAssets = asset.balanceOf(address(this));
+    function setAllowed(address owner, bool isAllowed) external onlyManagement {
+        require(owner != address(0), "zero owner");
+        allowed[owner] = isAllowed;
+        emit UpdateAllowed(owner, isAllowed);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    OPTIONAL TO OVERRIDE BY STRATEGIST
-    //////////////////////////////////////////////////////////////*/
+    function setLiquidator(
+        address liquidator,
+        bool isAllowed
+    ) external onlyManagement {
+        require(liquidator != address(0), "zero liquidator");
+        liquidators[liquidator] = isAllowed;
+        emit LiquidatorUpdated(liquidator, isAllowed);
+    }
 
-    /**
-     * @notice Gets the max amount of `asset` that can be withdrawn.
-     * @dev Defaults to an unlimited amount for any address. But can
-     * be overridden by strategists.
-     *
-     * This function will be called before any withdraw or redeem to enforce
-     * any limits desired by the strategist. This can be used for illiquid
-     * or sandwichable strategies.
-     *
-     *   EX:
-     *       return asset.balanceOf(yieldSource);
-     *
-     * This does not need to take into account the `_owner`'s share balance
-     * or conversion rates from shares to assets.
-     *
-     * @param . The address that is withdrawing from the strategy.
-     * @return . The available amount that can be withdrawn in terms of `asset`
-     */
-    function availableWithdrawLimit(
-        address /*_owner*/
+    function postCollateral(uint256 amount) external onlyBorrower {
+        require(amount > 0, "zero amount");
+
+        _accrueInterest();
+        IERC20(COLLATERAL_ASSET).safeTransferFrom(
+            msg.sender,
+            address(this),
+            amount
+        );
+        totalCollateral += amount;
+
+        emit CollateralPosted(msg.sender, amount, totalCollateral);
+    }
+
+    function borrow(uint256 amount, address receiver) external onlyBorrower {
+        require(!TokenizedStrategy.isShutdown(), "shutdown");
+        require(amount > 0, "zero amount");
+        require(receiver != address(0), "zero receiver");
+
+        _accrueInterest();
+        require(callDeadline == 0, "debt called");
+        require(
+            asset.balanceOf(address(this)) >= amount,
+            "insufficient liquidity"
+        );
+
+        principalDebt += amount;
+        debtAmount += amount;
+        require(
+            _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
+            "position unhealthy"
+        );
+
+        asset.safeTransfer(receiver, amount);
+
+        emit Borrowed(msg.sender, receiver, amount, debtAmount);
+    }
+
+    function repay(
+        uint256 amount
+    ) external onlyBorrower returns (uint256 actualRepaid) {
+        require(amount > 0, "zero amount");
+
+        _accrueInterest();
+
+        uint256 currentDebt = debtAmount;
+        require(currentDebt > 0, "no debt");
+
+        actualRepaid = Math.min(amount, currentDebt);
+        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
+
+        _applyRepayment(actualRepaid);
+
+        _syncCallState(debtAmount);
+
+        emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebtAmount);
+    }
+
+    function withdrawCollateral(
+        uint256 amount,
+        address receiver
+    ) external onlyBorrower {
+        require(amount > 0, "zero amount");
+        require(receiver != address(0), "zero receiver");
+
+        _accrueInterest();
+        require(callDeadline == 0, "debt called");
+        require(amount <= totalCollateral, "insufficient collateral");
+
+        totalCollateral -= amount;
+        require(
+            _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
+            "position unhealthy"
+        );
+        IERC20(COLLATERAL_ASSET).safeTransfer(receiver, amount);
+
+        emit CollateralWithdrawn(msg.sender, receiver, amount, totalCollateral);
+    }
+
+    function callDebt(uint256 amount) external onlyManagement {
+        require(amount > 0, "zero amount");
+
+        _accrueInterest();
+
+        uint256 currentDebt = debtAmount;
+        require(currentDebt > 0, "no debt");
+
+        if (calledDebtAmount > currentDebt) calledDebtAmount = currentDebt;
+
+        uint256 updatedCalledDebt = Math.min(
+            currentDebt,
+            calledDebtAmount + amount
+        );
+        require(updatedCalledDebt > calledDebtAmount, "already fully called");
+
+        calledDebtAmount = updatedCalledDebt;
+        callDeadline = block.timestamp + CALL_DURATION;
+
+        emit DebtCalled(msg.sender, amount, updatedCalledDebt, callDeadline);
+    }
+
+    function clearCall() external onlyManagement {
+        _accrueInterest();
+        require(calledDebtAmount == 0, "called debt active");
+        _clearCallState();
+    }
+
+    function liquidate(
+        uint256 repayAmount,
+        address receiver
+    ) external returns (uint256 actualRepaid, uint256 collateralSeized) {
+        require(repayAmount > 0, "zero amount");
+        require(receiver != address(0), "zero receiver");
+        require(
+            msg.sender == TokenizedStrategy.management() ||
+                liquidators[msg.sender],
+            "not liquidator"
+        );
+
+        _accrueInterest();
+
+        uint256 currentDebt = debtAmount;
+        require(currentDebt > 0, "no debt");
+
+        bool callOverdue = _isCallOverdue();
+        bool solvent = _isSolventAt(currentDebt, totalCollateral);
+        require(callOverdue || !solvent, "not liquidatable");
+
+        uint256 maxRepay = currentDebt;
+        if (callOverdue && solvent) {
+            maxRepay = calledDebtAmount;
+        }
+
+        uint256 collateralValue = _collateralValue(totalCollateral);
+        maxRepay = Math.min(maxRepay, collateralValue);
+        actualRepaid = Math.min(repayAmount, maxRepay);
+        require(actualRepaid > 0, "repay too small");
+
+        collateralSeized = _loanToCollateral(actualRepaid);
+        require(collateralSeized > 0, "seize too small");
+        if (collateralSeized > totalCollateral)
+            collateralSeized = totalCollateral;
+
+        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
+
+        totalCollateral -= collateralSeized;
+        _applyRepayment(actualRepaid);
+        _syncCallState(debtAmount);
+
+        IERC20(COLLATERAL_ASSET).safeTransfer(receiver, collateralSeized);
+
+        emit Liquidated(
+            msg.sender,
+            receiver,
+            actualRepaid,
+            collateralSeized,
+            debtAmount,
+            totalCollateral
+        );
+    }
+
+    function totalDebt() public view returns (uint256) {
+        return debtAmount + _previewInterest();
+    }
+
+    function isSolvent() public view returns (bool) {
+        return _isSolventAt(totalDebt(), totalCollateral);
+    }
+
+    function isHealthy() public view returns (bool) {
+        return isSolvent() && !_isCallOverdue();
+    }
+
+    function currentLtv() public view returns (uint256) {
+        uint256 currentDebt = totalDebt();
+        if (currentDebt == 0) return 0;
+
+        uint256 collateralValue = _collateralValue(totalCollateral);
+        if (collateralValue == 0) return type(uint256).max;
+
+        return Math.mulDiv(currentDebt, LLTV_SCALE, collateralValue);
+    }
+
+    function availableDepositLimit(
+        address owner
     ) public view override returns (uint256) {
-        // NOTE: Withdraw limitations such as liquidity constraints should be accounted for HERE
-        //  rather than _freeFunds in order to not count them as losses on withdraws.
+        if (TokenizedStrategy.isShutdown()) return 0;
+        if (allowed[owner]) return type(uint256).max;
+        return 0;
+    }
 
-        // TODO: If desired implement withdraw limit logic and any needed state variables.
-
-        // EX:
-        // if(yieldSource.notShutdown()) {
-        //    return asset.balanceOf(address(this)) + asset.balanceOf(yieldSource);
-        // }
+    function availableWithdrawLimit(
+        address
+    ) public view override returns (uint256) {
         return asset.balanceOf(address(this));
     }
 
-    /**
-     * @notice Gets the max amount of `asset` that an address can deposit.
-     * @dev Defaults to an unlimited amount for any address. But can
-     * be overridden by strategists.
-     *
-     * This function will be called before any deposit or mints to enforce
-     * any limits desired by the strategist. This can be used for either a
-     * traditional deposit limit or for implementing a whitelist etc.
-     *
-     *   EX:
-     *      if(isAllowed[_owner]) return super.availableDepositLimit(_owner);
-     *
-     * This does not need to take into account any conversion rates
-     * from shares to assets. But should know that any non max uint256
-     * amounts may be converted to shares. So it is recommended to keep
-     * custom amounts low enough as not to cause overflow when multiplied
-     * by `totalSupply`.
-     *
-     * @param . The address that is depositing into the strategy.
-     * @return . The available amount the `_owner` can deposit in terms of `asset`
-     *
-    function availableDepositLimit(
-        address _owner
-    ) public view override returns (uint256) {
-        TODO: If desired Implement deposit limit logic and any needed state variables .
-        
-        EX:    
-            uint256 totalAssets = TokenizedStrategy.totalAssets();
-            return totalAssets >= depositLimit ? 0 : depositLimit - totalAssets;
-    }
-    */
+    function rescue(address token, address receiver) external onlyManagement {
+        require(receiver != address(0), "zero receiver");
+        require(token != address(asset), "cannot rescue asset");
+        require(token != COLLATERAL_ASSET, "cannot rescue collateral");
 
-    /**
-     * @dev Optional function for strategist to override that can
-     *  be called in between reports.
-     *
-     * If '_tend' is used tendTrigger() will also need to be overridden.
-     *
-     * This call can only be called by a permissioned role so may be
-     * through protected relays.
-     *
-     * This can be used to harvest and compound rewards, deposit idle funds,
-     * perform needed position maintenance or anything else that doesn't need
-     * a full report for.
-     *
-     *   EX: A strategy that can not deposit funds without getting
-     *       sandwiched can use the tend when a certain threshold
-     *       of idle to totalAssets has been reached.
-     *
-     * This will have no effect on PPS of the strategy till report() is called.
-     *
-     * @param _totalIdle The current amount of idle funds that are available to deploy.
-     *
-    function _tend(uint256 _totalIdle) internal override {}
-    */
-
-    /**
-     * @dev Optional trigger to override if tend() will be used by the strategy.
-     * This must be implemented if the strategy hopes to invoke _tend().
-     *
-     * @return . Should return true if tend() should be called by keeper or false if not.
-     *
-    function _tendTrigger() internal view override returns (bool) {}
-    */
-
-    /**
-     * @dev Optional function for a strategist to override that will
-     * allow management to manually withdraw deployed funds from the
-     * yield source if a strategy is shutdown.
-     *
-     * This should attempt to free `_amount`, noting that `_amount` may
-     * be more than is currently deployed.
-     *
-     * NOTE: This will not realize any profits or losses. A separate
-     * {report} will be needed in order to record any profit/loss. If
-     * a report may need to be called after a shutdown it is important
-     * to check if the strategy is shutdown during {_harvestAndReport}
-     * so that it does not simply re-deploy all funds that had been freed.
-     *
-     * EX:
-     *   if(freeAsset > 0 && !TokenizedStrategy.isShutdown()) {
-     *       depositFunds...
-     *    }
-     *
-     * @param _amount The amount of asset to attempt to free.
-     *
-    function _emergencyWithdraw(uint256 _amount) internal override {
-        TODO: If desired implement simple logic to free deployed funds.
-
-        EX:
-            _amount = min(_amount, aToken.balanceOf(address(this)));
-            _freeFunds(_amount);
+        IERC20(token).safeTransfer(
+            receiver,
+            IERC20(token).balanceOf(address(this))
+        );
     }
 
-    */
+    function _deployFunds(uint256) internal override {}
+
+    function _freeFunds(uint256) internal override {}
+
+    function _harvestAndReport() internal view override returns (uint256) {
+        uint256 currentDebt = totalDebt();
+        uint256 totalAssets = asset.balanceOf(address(this));
+
+        if (currentDebt == 0 || totalCollateral == 0) return totalAssets;
+
+        return
+            totalAssets +
+            Math.min(currentDebt, _collateralValue(totalCollateral));
+    }
+
+    function _accrueInterest() internal {
+        uint256 accruedInterest = _previewInterest();
+        if (accruedInterest > 0) debtAmount += accruedInterest;
+
+        lastAccrualTime = block.timestamp;
+    }
+
+    function _applyRepayment(uint256 amount) internal {
+        uint256 calledReduction = Math.min(calledDebtAmount, amount);
+        if (calledReduction > 0) calledDebtAmount -= calledReduction;
+
+        uint256 remaining = amount;
+        uint256 interestOutstanding = debtAmount - principalDebt;
+        uint256 interestReduction = Math.min(interestOutstanding, remaining);
+        remaining -= interestReduction;
+
+        if (remaining > 0) principalDebt -= remaining;
+
+        debtAmount -= amount;
+    }
+
+    function _syncCallState(uint256 currentDebt) internal {
+        if (calledDebtAmount > currentDebt) calledDebtAmount = currentDebt;
+    }
+
+    function _clearCallState() internal {
+        bool hadCall = calledDebtAmount != 0 || callDeadline != 0;
+
+        calledDebtAmount = 0;
+        callDeadline = 0;
+
+        if (hadCall) emit CallCleared(msg.sender);
+    }
+
+    function _isSolventAt(
+        uint256 currentDebt,
+        uint256 collateralAmount
+    ) internal view returns (bool) {
+        if (currentDebt == 0) return true;
+        if (collateralAmount == 0) return false;
+
+        uint256 maxDebt = Math.mulDiv(
+            _collateralValue(collateralAmount),
+            LLTV,
+            LLTV_SCALE
+        );
+        return currentDebt <= maxDebt;
+    }
+
+    function _isCallOverdue() internal view returns (bool) {
+        return
+            calledDebtAmount > 0 &&
+            callDeadline > 0 &&
+            block.timestamp > callDeadline;
+    }
+
+    function _previewInterest() internal view returns (uint256) {
+        if (principalDebt == 0) return 0;
+
+        uint256 elapsed = block.timestamp - lastAccrualTime;
+        if (elapsed == 0) return 0;
+
+        uint256 annualInterest = Math.mulDiv(
+            principalDebt,
+            FIXED_RATE,
+            MAX_BPS
+        );
+        return Math.mulDiv(annualInterest, elapsed, SECONDS_PER_YEAR);
+    }
+
+    function _collateralValue(
+        uint256 collateralAmount
+    ) internal view returns (uint256) {
+        if (collateralAmount == 0) return 0;
+
+        uint256 price = ORACLE.price();
+        require(price > 0, "zero oracle price");
+
+        return Math.mulDiv(collateralAmount, price, ORACLE_PRICE_SCALE);
+    }
+
+    function _loanToCollateral(
+        uint256 loanAmount
+    ) internal view returns (uint256) {
+        if (loanAmount == 0) return 0;
+
+        uint256 price = ORACLE.price();
+        require(price > 0, "zero oracle price");
+
+        return Math.mulDiv(loanAmount, ORACLE_PRICE_SCALE, price);
+    }
 }
