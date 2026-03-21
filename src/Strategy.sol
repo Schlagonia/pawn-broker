@@ -3,7 +3,6 @@ pragma solidity ^0.8.23;
 
 import {BaseHooks, ERC20, BaseHealthCheck} from "@periphery/Bases/Hooks/BaseHooks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
@@ -11,7 +10,6 @@ import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 /// @notice Fixed-rate single-borrower strategy secured by posted collateral.
 contract Strategy is BaseHooks {
     using SafeERC20 for ERC20;
-    using SafeERC20 for IERC20;
 
     event CollateralPosted(
         address indexed caller,
@@ -71,7 +69,7 @@ contract Strategy is BaseHooks {
     IMorphoOracle internal immutable ORACLE;
     /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
     uint256 internal immutable LLTV;
-    /// @dev The fixed annualized interest rate charged on principal, in basis points.
+    /// @dev The fixed annualized interest rate charged on debt, in basis points.
     uint256 internal immutable FIXED_RATE;
     /// @dev The time window the borrower has to satisfy an active debt call.
     uint256 internal immutable CALL_DURATION;
@@ -80,9 +78,7 @@ contract Strategy is BaseHooks {
     uint256 public totalCollateral;
     /// @dev The current global debt ceiling available to the borrower.
     uint256 public maxDebt;
-    /// @dev The remaining borrowed principal before accrued interest.
-    uint256 public principalDebt;
-    /// @dev The total debt stored on-chain after the last accrual update.
+    /// @dev The stored compounded debt balance after the last accrual update.
     uint256 internal debtAmount;
     /// @dev The timestamp of the last interest accrual.
     uint256 public lastAccrualTime;
@@ -158,7 +154,7 @@ contract Strategy is BaseHooks {
         require(_amount > 0, "zero amount");
 
         _accrueInterest();
-        IERC20(COLLATERAL_ASSET).safeTransferFrom(
+        ERC20(COLLATERAL_ASSET).safeTransferFrom(
             msg.sender,
             address(this),
             _amount
@@ -183,7 +179,6 @@ contract Strategy is BaseHooks {
 
         _accrueInterest();
 
-        principalDebt += _amount;
         debtAmount += _amount;
         require(debtAmount <= maxDebt, "max debt");
         require(
@@ -236,7 +231,7 @@ contract Strategy is BaseHooks {
             _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
-        IERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
+        ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
 
         emit CollateralWithdrawn(
             msg.sender,
@@ -304,6 +299,7 @@ contract Strategy is BaseHooks {
 
         uint256 _maxRepay = _currentDebt;
         if (_callOverdue && _solvent) {
+            // If just overdue but still solvent, repay the called debt.
             _maxRepay = calledDebtAmount;
         }
 
@@ -322,7 +318,7 @@ contract Strategy is BaseHooks {
         totalCollateral -= collateralSeized;
         _applyRepayment(actualRepaid);
 
-        IERC20(COLLATERAL_ASSET).safeTransfer(_receiver, collateralSeized);
+        ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, collateralSeized);
 
         emit Liquidated(
             msg.sender,
@@ -379,9 +375,8 @@ contract Strategy is BaseHooks {
 
     /// @notice Returns the amount of idle base asset currently withdrawable from the strategy.
     function availableWithdrawLimit(
-        address _owner
+        address
     ) public view override returns (uint256) {
-        _owner;
         return asset.balanceOf(address(this));
     }
 
@@ -472,14 +467,6 @@ contract Strategy is BaseHooks {
             }
         }
 
-        uint256 _remaining = _amount;
-        uint256 _interestOutstanding = debtAmount - principalDebt;
-        // Repay accrued interest first, then reduce principal with whatever is left.
-        uint256 _interestReduction = Math.min(_interestOutstanding, _remaining);
-        _remaining -= _interestReduction;
-
-        if (_remaining > 0) principalDebt -= _remaining;
-
         debtAmount -= _amount;
     }
 
@@ -506,16 +493,12 @@ contract Strategy is BaseHooks {
     }
 
     function _previewInterest() internal view returns (uint256) {
-        if (principalDebt == 0) return 0;
+        if (debtAmount == 0) return 0;
 
         uint256 _elapsed = block.timestamp - lastAccrualTime;
         if (_elapsed == 0) return 0;
 
-        uint256 _annualInterest = Math.mulDiv(
-            principalDebt,
-            FIXED_RATE,
-            MAX_BPS
-        );
+        uint256 _annualInterest = Math.mulDiv(debtAmount, FIXED_RATE, MAX_BPS);
         return Math.mulDiv(_annualInterest, _elapsed, SECONDS_PER_YEAR);
     }
 
@@ -547,9 +530,9 @@ contract Strategy is BaseHooks {
         require(_token != address(asset), "cannot rescue asset");
         require(_token != COLLATERAL_ASSET, "cannot rescue collateral");
 
-        IERC20(_token).safeTransfer(
+        ERC20(_token).safeTransfer(
             _receiver,
-            IERC20(_token).balanceOf(address(this))
+            ERC20(_token).balanceOf(address(this))
         );
     }
 }

@@ -2,14 +2,12 @@
 pragma solidity ^0.8.23;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Setup, ERC20} from "./utils/Setup.sol";
 import {Strategy} from "../Strategy.sol";
 import {IStrategyInterface} from "../interfaces/IStrategyInterface.sol";
 
 // Extended interface to access public state not in IStrategyInterface
 interface IStrategyExtended is IStrategyInterface {
-    function principalDebt() external view returns (uint256);
     function lastAccrualTime() external view returns (uint256);
     function rescue(address _token, address _receiver) external;
     function setDoHealthCheck(bool _doHealthCheck) external;
@@ -653,7 +651,7 @@ contract ComprehensiveTest is Setup {
         );
     }
 
-    function test_borrowUpdatesPrincipalAndDebtAmount() public {
+    function test_borrowUpdatesDebtAmount() public {
         uint256 liquidity = defaultLiquidityAmount();
         uint256 collateralAmt = defaultCollateralAmount();
         uint256 borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -661,17 +659,11 @@ contract ComprehensiveTest is Setup {
         mintAndDepositIntoStrategy(strategy, user, liquidity);
         postCollateral(collateralAmt);
 
-        assertEq(strat.principalDebt(), 0, "principal should start at 0");
         assertEq(strategy.totalDebt(), 0, "total debt should start at 0");
 
         vm.prank(borrower);
         strategy.borrow(borrowAmt, borrower);
 
-        assertEq(
-            strat.principalDebt(),
-            borrowAmt,
-            "principal should equal borrow amount"
-        );
         assertEq(
             strategy.totalDebt(),
             borrowAmt,
@@ -793,20 +785,11 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(firstBorrow, borrower);
 
-        assertEq(
-            strat.principalDebt(),
-            firstBorrow,
-            "principal after first borrow"
-        );
+        assertEq(strategy.totalDebt(), firstBorrow, "debt after first borrow");
 
         vm.prank(borrower);
         strategy.borrow(secondBorrow, borrower);
 
-        assertEq(
-            strat.principalDebt(),
-            firstBorrow + secondBorrow,
-            "principal after second borrow"
-        );
         assertEq(
             strategy.totalDebt(),
             firstBorrow + secondBorrow,
@@ -843,7 +826,6 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(strategy.totalDebt(), 0, "total debt should be zero");
-        assertEq(strat.principalDebt(), 0, "principal should be zero");
     }
 
     function test_partialRepayReducesDebtCorrectly() public {
@@ -889,26 +871,23 @@ contract ComprehensiveTest is Setup {
         assertEq(strategy.totalDebt(), 0, "debt should be zero");
     }
 
-    function test_repayReducesInterestBeforePrincipal() public {
+    function test_repayingOneYearInterestRestoresDebtToBorrowAmount() public {
         (, , uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
-        // Expected interest: principalDebt * fixedRate / MAX_BPS over 1 year
         uint256 expectedInterest = (borrowAmt * fixedRate) / MAX_BPS;
 
-        // Repay just the interest
         airdrop(asset, borrower, expectedInterest);
         vm.startPrank(borrower);
         asset.approve(address(strategy), expectedInterest);
         strategy.repay(expectedInterest);
         vm.stopPrank();
 
-        // Principal should remain unchanged
         assertEq(
-            strat.principalDebt(),
+            strategy.totalDebt(),
             borrowAmt,
-            "principal should be unchanged after interest-only repay"
+            "repaying one year of interest should restore the debt to borrow amount"
         );
     }
 
@@ -1026,13 +1005,11 @@ contract ComprehensiveTest is Setup {
         );
     }
 
-    function test_interestOnlyAccruesOnPrincipalNotCompounding() public {
+    function test_interestCompoundsAfterOnChainAccrualTouch() public {
         (, , uint256 borrowAmt) = _setupPosition();
 
-        // Wait 1 year
         skip(365 days);
 
-        // After 1 year, interest accrued = principal * rate / MAX_BPS
         uint256 expectedAfter1Year = borrowAmt +
             (borrowAmt * fixedRate) /
             MAX_BPS;
@@ -1051,34 +1028,31 @@ contract ComprehensiveTest is Setup {
         strategy.postCollateral(tiny);
         vm.stopPrank();
 
-        // Now wait another year: interest should still be based on original principal
         skip(365 days);
 
         uint256 expectedAfter2Years = expectedAfter1Year +
-            (borrowAmt * fixedRate) /
+            (expectedAfter1Year * fixedRate) /
             MAX_BPS;
         assertApproxEqAbs(
             strategy.totalDebt(),
             expectedAfter2Years,
             2,
-            "year 2 interest should be on principal, not compounded"
+            "year 2 interest should compound after the on-chain accrual touch"
         );
     }
 
     function test_totalDebtViewIncludesPendingInterest() public {
         (, , uint256 borrowAmt) = _setupPosition();
+        uint256 accrualTimeBefore = strat.lastAccrualTime();
 
         skip(30 days);
 
-        // totalDebt() is a view that should include unaccrued interest
         uint256 totalOwed = strategy.totalDebt();
         assertGt(totalOwed, borrowAmt, "view should include pending interest");
-
-        // Confirm principalDebt is still original (no on-chain accrual happened)
         assertEq(
-            strat.principalDebt(),
-            borrowAmt,
-            "principal unchanged in view"
+            strat.lastAccrualTime(),
+            accrualTimeBefore,
+            "view should not accrue debt on-chain"
         );
     }
 
@@ -1093,40 +1067,36 @@ contract ComprehensiveTest is Setup {
         );
     }
 
-    function test_noInterestIfNoPrincipal() public {
+    function test_noInterestIfNoDebt() public {
         mintAndDepositIntoStrategy(strategy, user, defaultLiquidityAmount());
 
         skip(365 days);
 
-        assertEq(strategy.totalDebt(), 0, "no principal means no interest");
+        assertEq(strategy.totalDebt(), 0, "no debt means no interest");
     }
 
-    function test_interestAccruesOnReducedPrincipalAfterRepay() public {
+    function test_interestAccruesOnReducedDebtAfterRepay() public {
         (, , uint256 borrowAmt) = _setupPosition();
 
-        // Repay half the principal
-        uint256 halfPrincipal = borrowAmt / 2;
-        airdrop(asset, borrower, halfPrincipal);
+        uint256 halfRepayAmount = borrowAmt / 2;
+        airdrop(asset, borrower, halfRepayAmount);
         vm.startPrank(borrower);
-        asset.approve(address(strategy), halfPrincipal);
-        strategy.repay(halfPrincipal);
+        asset.approve(address(strategy), halfRepayAmount);
+        strategy.repay(halfRepayAmount);
         vm.stopPrank();
 
-        uint256 remainingPrincipal = strat.principalDebt();
         uint256 debtAfterRepay = strategy.totalDebt();
 
-        // Now skip 1 year
         skip(365 days);
 
-        uint256 expectedNewInterest = (remainingPrincipal * fixedRate) /
-            MAX_BPS;
+        uint256 expectedNewInterest = (debtAfterRepay * fixedRate) / MAX_BPS;
         uint256 totalExpected = debtAfterRepay + expectedNewInterest;
 
         assertApproxEqAbs(
             strategy.totalDebt(),
             totalExpected,
             1,
-            "interest should accrue on reduced principal"
+            "interest should accrue on reduced debt"
         );
     }
 
@@ -2379,13 +2349,14 @@ contract ComprehensiveTest is Setup {
         assertLe(strategy.currentLtv(), lltv, "LTV should be at or below LLTV");
     }
 
-    function test_repayExactlyTheInterestAmountPrincipalUnchanged() public {
+    function test_repayExactlyTheInterestAmountReturnsDebtToBorrowAmount()
+        public
+    {
         (, , uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
         uint256 expectedInterest = (borrowAmt * fixedRate) / MAX_BPS;
-        uint256 totalOwed = strategy.totalDebt();
 
         // Repay just the interest
         airdrop(asset, borrower, expectedInterest);
@@ -2394,14 +2365,11 @@ contract ComprehensiveTest is Setup {
         strategy.repay(expectedInterest);
         vm.stopPrank();
 
-        // Principal should remain the same
-        assertEq(strat.principalDebt(), borrowAmt, "principal unchanged");
-        // Remaining debt should be the original principal
         assertApproxEqAbs(
             strategy.totalDebt(),
             borrowAmt,
             1,
-            "remaining debt should be principal"
+            "remaining debt should return to borrow amount"
         );
     }
 
