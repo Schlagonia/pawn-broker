@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.23;
 
-import {BaseHealthCheck, ERC20} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
+import {BaseHooks, ERC20, BaseHealthCheck} from "@periphery/Bases/Hooks/BaseHooks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
-import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
 
 /// @notice Fixed-rate single-borrower strategy secured by posted collateral.
-contract Strategy is BaseHealthCheck {
+contract Strategy is BaseHooks {
     using SafeERC20 for ERC20;
     using SafeERC20 for IERC20;
 
@@ -64,21 +63,39 @@ contract Strategy is BaseHealthCheck {
     uint256 public constant ORACLE_PRICE_SCALE = 1e36;
     uint256 public constant SECONDS_PER_YEAR = 365 days;
 
+    /// @dev The only address allowed to post collateral, borrow, repay, and pull collateral.
     address internal immutable BORROWER;
+    /// @dev The collateral token backing the borrower position.
     address internal immutable COLLATERAL_ASSET;
+    /// @dev The oracle used to convert collateral into base-asset value.
     IMorphoOracle internal immutable ORACLE;
+    /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
     uint256 internal immutable LLTV;
+    /// @dev The fixed annualized interest rate charged on principal, in basis points.
     uint256 internal immutable FIXED_RATE;
+    /// @dev The time window the borrower has to satisfy an active debt call.
     uint256 internal immutable CALL_DURATION;
 
+    /// @dev The amount of collateral currently posted by the borrower.
     uint256 public totalCollateral;
-    uint256 internal principalDebt;
+    /// @dev The current global debt ceiling available to the borrower.
+    uint256 public maxDebt;
+    /// @dev The remaining borrowed principal before accrued interest.
+    uint256 public principalDebt;
+    /// @dev The total debt stored on-chain after the last accrual update.
     uint256 internal debtAmount;
-    uint256 internal lastAccrualTime;
+    /// @dev The timestamp of the last interest accrual.
+    uint256 public lastAccrualTime;
+    /// @dev The amount of debt currently under an active repayment call.
     uint256 public calledDebtAmount;
+    /// @dev The called debt already repaid and still sitting idle in the strategy.
+    uint256 public repaidCalledDebt;
+    /// @dev The deadline for the current debt call, or zero when no call is active.
     uint256 public callDeadline;
 
+    /// @dev Addresses allowed to deposit into the strategy.
     mapping(address => bool) internal allowed;
+    /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) internal liquidators;
 
     /// @notice Deploys a strategy for one borrower, one collateral asset, and one oracle.
@@ -168,6 +185,7 @@ contract Strategy is BaseHealthCheck {
 
         principalDebt += _amount;
         debtAmount += _amount;
+        require(debtAmount <= maxDebt, "max debt");
         require(
             _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
@@ -195,8 +213,6 @@ contract Strategy is BaseHealthCheck {
         asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
         _applyRepayment(actualRepaid);
-
-        _syncCallState(debtAmount);
 
         emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebtAmount);
     }
@@ -240,23 +256,24 @@ contract Strategy is BaseHealthCheck {
         uint256 _currentDebt = debtAmount;
         require(_currentDebt > 0, "no debt");
 
-        uint256 _updatedCalledDebt = Math.min(
-            _currentDebt,
-            calledDebtAmount + _amount
-        );
-        require(_updatedCalledDebt > calledDebtAmount, "already fully called");
+        uint256 _availableDebtToCall = _currentDebt - calledDebtAmount;
+        uint256 _newlyCalledDebt = Math.min(_amount, _availableDebtToCall);
+        require(_newlyCalledDebt > 0, "already fully called");
 
-        calledDebtAmount = _updatedCalledDebt;
+        calledDebtAmount += _newlyCalledDebt;
+        if (_newlyCalledDebt >= maxDebt) {
+            maxDebt = 0;
+        } else {
+            maxDebt -= _newlyCalledDebt;
+        }
         callDeadline = block.timestamp + CALL_DURATION;
 
-        emit DebtCalled(msg.sender, _amount, _updatedCalledDebt, callDeadline);
-    }
-
-    /// @notice Clears an active debt call after the called amount has been satisfied.
-    function clearCall() external onlyManagement {
-        _accrueInterest();
-        require(calledDebtAmount == 0, "called debt active");
-        _clearCallState();
+        emit DebtCalled(
+            msg.sender,
+            _newlyCalledDebt,
+            calledDebtAmount,
+            callDeadline
+        );
     }
 
     /// @notice Repays debt and seizes collateral from a liquidatable position.
@@ -304,7 +321,6 @@ contract Strategy is BaseHealthCheck {
 
         totalCollateral -= collateralSeized;
         _applyRepayment(actualRepaid);
-        _syncCallState(debtAmount);
 
         IERC20(COLLATERAL_ASSET).safeTransfer(_receiver, collateralSeized);
 
@@ -369,13 +385,56 @@ contract Strategy is BaseHealthCheck {
         return asset.balanceOf(address(this));
     }
 
-    function _deployFunds(uint256 _amount) internal pure override {
-        _amount;
+    function _postDepositHook(
+        uint256 _assets,
+        uint256,
+        address
+    ) internal override {
+        maxDebt += _assets;
     }
 
-    function _freeFunds(uint256 _amount) internal pure override {
-        _amount;
+    function _postWithdrawHook(
+        uint256 _assets,
+        uint256,
+        address,
+        address,
+        uint256
+    ) internal override {
+        if (_assets == 0) return;
+
+        uint256 _currentDebt = totalDebt();
+        // Only idle above current debt headroom is borrowable. If a withdrawal
+        // pulls that borrowable idle down, the global debt ceiling needs to ratchet down too.
+        uint256 _borrowableIdle = maxDebt > _currentDebt
+            ? maxDebt - _currentDebt
+            : 0;
+        uint256 _idleAfter = asset.balanceOf(address(this));
+        uint256 _maxDebtReduction = _borrowableIdle > _idleAfter
+            ? _borrowableIdle - _idleAfter
+            : 0;
+
+        if (_maxDebtReduction > 0) {
+            maxDebt -= _maxDebtReduction;
+        }
+
+        uint256 _nonBorrowableConsumed = _assets - _maxDebtReduction;
+
+        if (_nonBorrowableConsumed > 0) {
+            // Called debt that was already repaid lives as idle cash inside the strategy.
+            // Withdrawing that cash should burn this bucket, not ratchet maxDebt down again.
+            uint256 _repaidCalledConsumed = Math.min(
+                repaidCalledDebt,
+                _nonBorrowableConsumed
+            );
+            if (_repaidCalledConsumed > 0) {
+                repaidCalledDebt -= _repaidCalledConsumed;
+            }
+        }
     }
+
+    function _deployFunds(uint256) internal pure override {}
+
+    function _freeFunds(uint256) internal pure override {}
 
     function _harvestAndReport() internal view override returns (uint256) {
         uint256 _currentDebt = totalDebt();
@@ -401,29 +460,27 @@ contract Strategy is BaseHealthCheck {
 
     function _applyRepayment(uint256 _amount) internal {
         uint256 _calledReduction = Math.min(calledDebtAmount, _amount);
-        if (_calledReduction > 0) calledDebtAmount -= _calledReduction;
+        if (_calledReduction > 0) {
+            // Called debt that gets repaid stays non-borrowable. We track it separately
+            // so later withdrawals do not accidentally reopen the line.
+            calledDebtAmount -= _calledReduction;
+            repaidCalledDebt += _calledReduction;
+
+            if (calledDebtAmount == 0) {
+                callDeadline = 0;
+                emit CallCleared(msg.sender);
+            }
+        }
 
         uint256 _remaining = _amount;
         uint256 _interestOutstanding = debtAmount - principalDebt;
+        // Repay accrued interest first, then reduce principal with whatever is left.
         uint256 _interestReduction = Math.min(_interestOutstanding, _remaining);
         _remaining -= _interestReduction;
 
         if (_remaining > 0) principalDebt -= _remaining;
 
         debtAmount -= _amount;
-    }
-
-    function _syncCallState(uint256 _currentDebt) internal {
-        if (calledDebtAmount > _currentDebt) calledDebtAmount = _currentDebt;
-    }
-
-    function _clearCallState() internal {
-        bool _hadCall = calledDebtAmount != 0 || callDeadline != 0;
-
-        calledDebtAmount = 0;
-        callDeadline = 0;
-
-        if (_hadCall) emit CallCleared(msg.sender);
     }
 
     function _isSolventAt(

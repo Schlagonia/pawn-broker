@@ -25,9 +25,6 @@ interface IStrategyInterface is IStrategy {
     /// @notice Calls debt and starts the repayment deadline window.
     function callDebt(uint256 _amount) external;
 
-    /// @notice Clears an active debt call after the called amount has been satisfied.
-    function clearCall() external;
-
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     function liquidate(
         uint256 _repayAmount,
@@ -40,8 +37,14 @@ interface IStrategyInterface is IStrategy {
     /// @notice Returns the amount of collateral currently posted.
     function totalCollateral() external view returns (uint256);
 
+    /// @notice Returns the current global debt ceiling enforced on new borrowing.
+    function maxDebt() external view returns (uint256);
+
     /// @notice Returns the remaining debt reduction required by an active debt call.
     function calledDebtAmount() external view returns (uint256);
+
+    /// @notice Returns the called debt already repaid and still sitting idle in the strategy.
+    function repaidCalledDebt() external view returns (uint256);
 
     /// @notice Returns the active call deadline, or zero when no call is active.
     function callDeadline() external view returns (uint256);

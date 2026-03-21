@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.23;
 
-import {Setup, IStrategyInterface} from "./utils/Setup.sol";
+import {Setup} from "./utils/Setup.sol";
 
 contract ShutdownTest is Setup {
     function test_shutdownBlocksNewDeposits() public {

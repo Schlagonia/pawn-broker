@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.23;
 
-import {Setup, ERC20, IStrategyInterface} from "./utils/Setup.sol";
+import {Setup, ERC20} from "./utils/Setup.sol";
 
 contract FunctionSignatureTest is Setup {
     function test_functionCollisions() public {
@@ -40,7 +40,9 @@ contract FunctionSignatureTest is Setup {
         assertEq(strategy.decimals(), asset.decimals(), "decimals");
 
         assertEq(strategy.totalCollateral(), 0);
+        assertEq(strategy.maxDebt(), 0);
         assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
         assertEq(strategy.totalDebt(), 0);
         assertTrue(strategy.isSolvent());

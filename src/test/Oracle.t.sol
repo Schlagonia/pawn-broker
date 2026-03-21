@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {Setup, IStrategyInterface} from "./utils/Setup.sol";
+import {Setup} from "./utils/Setup.sol";
 
 contract OracleTest is Setup {
     function test_oracleCapsBorrowAtLltv() public {

@@ -235,6 +235,9 @@ contract BorrowerRepairTest is LocalSetup {
 
         assertEq(actualRepaid, partialRepayAmount);
         assertEq(strategy.calledDebtAmount(), callAmount - partialRepayAmount);
+        assertEq(strategy.repaidCalledDebt(), partialRepayAmount);
+        assertEq(strategy.maxDebt(), liquidity - callAmount);
+        assertGt(strategy.callDeadline(), 0);
         assertEq(strategy.totalDebt(), debtAmountBefore - partialRepayAmount);
     }
 
@@ -263,5 +266,81 @@ contract BorrowerRepairTest is LocalSetup {
 
         assertEq(strategy.totalCollateral(), collateralAmount + topUpAmount);
         assertEq(strategy.totalDebt(), borrowAmount);
+    }
+}
+
+contract MaxDebtAccountingTest is LocalSetup {
+    function test_depositAndWithdrawUpdateMaxDebtThroughHooks() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 withdrawAmount = 2_000e18;
+
+        _allowAndDeposit(user, depositAmount);
+        assertEq(strategy.maxDebt(), depositAmount);
+
+        vm.prank(user);
+        strategy.withdraw(withdrawAmount, user, user);
+
+        assertEq(strategy.maxDebt(), depositAmount - withdrawAmount);
+    }
+
+    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+        uint256 callAmount = 2_000e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        asset.mint(borrower, callAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), callAmount);
+        strategy.repay(callAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
+        assertEq(strategy.callDeadline(), 0);
+
+        vm.prank(user);
+        strategy.withdraw(callAmount, user, user);
+
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.repaidCalledDebt(), 0);
+    }
+
+    function test_withdrawOfRepaidInterestDoesNotReduceMaxDebt() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 8_000e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        skip(365 days);
+
+        uint256 interestAmount = strategy.totalDebt() - borrowAmount;
+
+        asset.mint(borrower, interestAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), interestAmount);
+        strategy.repay(interestAmount);
+        vm.stopPrank();
+
+        vm.prank(user);
+        strategy.withdraw(interestAmount, user, user);
+
+        assertEq(strategy.maxDebt(), depositAmount);
     }
 }
