@@ -3,11 +3,11 @@ pragma solidity ^0.8.23;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Setup, ERC20} from "./utils/Setup.sol";
-import {Strategy} from "../Strategy.sol";
-import {IStrategyInterface} from "../interfaces/IStrategyInterface.sol";
+import {PawnBroker} from "../PawnBroker.sol";
+import {IPawnBroker} from "../interfaces/IPawnBroker.sol";
 
-// Extended interface to access public state not in IStrategyInterface
-interface IStrategyExtended is IStrategyInterface {
+// Extended interface to access public state not in IPawnBroker
+interface IStrategyExtended is IPawnBroker {
     function lastAccrualTime() external view returns (uint256);
     function rescue(address _token, address _receiver) external;
     function setDoHealthCheck(bool _doHealthCheck) external;
@@ -16,7 +16,7 @@ interface IStrategyExtended is IStrategyInterface {
 contract ComprehensiveTest is Setup {
     IStrategyExtended internal strat;
 
-    // Events mirrored from Strategy.sol for expectEmit checks
+    // Events mirrored from PawnBroker.sol for expectEmit checks
     event CollateralPosted(
         address indexed caller,
         uint256 amount,
@@ -38,7 +38,7 @@ contract ComprehensiveTest is Setup {
         address indexed caller,
         uint256 amount,
         uint256 debtAmount,
-        uint256 calledDebtAmount
+        uint256 calledDebt
     );
     event DebtCalled(
         address indexed caller,
@@ -371,7 +371,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsZeroBorrower() public {
         vm.expectRevert("zero borrower");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             address(0),
@@ -385,7 +385,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsZeroCollateral() public {
         vm.expectRevert("zero collateral");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -399,7 +399,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsZeroOracle() public {
         vm.expectRevert("zero oracle");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -413,7 +413,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsSameAssetAndCollateral() public {
         vm.expectRevert("shared asset");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -427,7 +427,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsInvalidLltv() public {
         vm.expectRevert("bad lltv");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -439,7 +439,7 @@ contract ComprehensiveTest is Setup {
         );
 
         vm.expectRevert("bad lltv");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -451,7 +451,7 @@ contract ComprehensiveTest is Setup {
         );
 
         vm.expectRevert("bad lltv");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -465,7 +465,7 @@ contract ComprehensiveTest is Setup {
 
     function test_constructorRejectsZeroCallDuration() public {
         vm.expectRevert("zero call duration");
-        new Strategy(
+        new PawnBroker(
             address(asset),
             "Test",
             borrower,
@@ -908,7 +908,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(
-            strategy.calledDebtAmount(),
+            strategy.calledDebt(),
             callAmount - repayAmt,
             "called debt should be reduced"
         );
@@ -927,7 +927,7 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount);
 
         assertTrue(strategy.callDeadline() > 0, "deadline should be set");
-        assertEq(strategy.calledDebtAmount(), callAmount, "called amount set");
+        assertEq(strategy.calledDebt(), callAmount, "called amount set");
 
         airdrop(asset, borrower, callAmount);
         vm.startPrank(borrower);
@@ -935,11 +935,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(callAmount);
         vm.stopPrank();
 
-        assertEq(
-            strategy.calledDebtAmount(),
-            0,
-            "called debt should be cleared"
-        );
+        assertEq(strategy.calledDebt(), 0, "called debt should be cleared");
         assertEq(strategy.callDeadline(), 0, "deadline should be cleared");
     }
 
@@ -1183,11 +1179,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(callAmount);
 
-        assertEq(
-            strategy.calledDebtAmount(),
-            callAmount,
-            "calledDebtAmount set"
-        );
+        assertEq(strategy.calledDebt(), callAmount, "calledDebt set");
         assertEq(
             strategy.callDeadline(),
             block.timestamp + callDuration,
@@ -1219,7 +1211,7 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(borrowAmt * 2);
 
         assertEq(
-            strategy.calledDebtAmount(),
+            strategy.calledDebt(),
             borrowAmt,
             "called debt should cap at total debt"
         );
@@ -1281,7 +1273,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(callAmount);
         vm.stopPrank();
 
-        assertEq(strategy.calledDebtAmount(), 0, "called debt cleared");
+        assertEq(strategy.calledDebt(), 0, "called debt cleared");
         assertEq(strategy.callDeadline(), 0, "deadline cleared");
 
         // Now borrow and withdraw should work again (within limits)
@@ -1306,7 +1298,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(
-            strategy.calledDebtAmount(),
+            strategy.calledDebt(),
             callAmount - partialRepay,
             "remaining called debt"
         );
@@ -1322,7 +1314,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(callAmount1);
 
-        assertEq(strategy.calledDebtAmount(), callAmount1, "after first call");
+        assertEq(strategy.calledDebt(), callAmount1, "after first call");
 
         // Skip some time but not past deadline
         skip(callDuration / 2);
@@ -1331,7 +1323,7 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount2);
 
         assertEq(
-            strategy.calledDebtAmount(),
+            strategy.calledDebt(),
             callAmount1 + callAmount2,
             "after second call"
         );
@@ -1494,7 +1486,7 @@ contract ComprehensiveTest is Setup {
         (uint256 actualRepaid, ) = strategy.liquidate(borrowAmt, management);
         vm.stopPrank();
 
-        // When solvent + call overdue, maxRepay = calledDebtAmount
+        // When solvent + call overdue, maxRepay = calledDebt
         assertLe(
             actualRepaid,
             callAmount,
@@ -1673,11 +1665,7 @@ contract ComprehensiveTest is Setup {
         strategy.liquidate(callAmount, liquidator);
         vm.stopPrank();
 
-        assertEq(
-            strategy.calledDebtAmount(),
-            0,
-            "called debt should be cleared"
-        );
+        assertEq(strategy.calledDebt(), 0, "called debt should be cleared");
         assertEq(strategy.callDeadline(), 0, "deadline should be cleared");
     }
 
@@ -2393,7 +2381,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(borrowAmt);
 
-        assertEq(strategy.calledDebtAmount(), borrowAmt, "all debt called");
+        assertEq(strategy.calledDebt(), borrowAmt, "all debt called");
         assertEq(strategy.maxDebt(), 0, "maxDebt should be 0");
     }
 
@@ -2416,7 +2404,7 @@ contract ComprehensiveTest is Setup {
         (uint256 actualRepaid, ) = strategy.liquidate(hugeAmount, management);
         vm.stopPrank();
 
-        // Should be capped at calledDebtAmount since position is still solvent
+        // Should be capped at calledDebt since position is still solvent
         assertLe(
             actualRepaid,
             callAmount,
@@ -2501,7 +2489,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(callAmount1);
         vm.stopPrank();
 
-        assertEq(strategy.calledDebtAmount(), 0, "first call cleared");
+        assertEq(strategy.calledDebt(), 0, "first call cleared");
         assertEq(strategy.callDeadline(), 0, "deadline cleared");
 
         skip(30 days);
@@ -2517,7 +2505,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(callAmount2);
         vm.stopPrank();
 
-        assertEq(strategy.calledDebtAmount(), 0, "second call cleared");
+        assertEq(strategy.calledDebt(), 0, "second call cleared");
 
         // Full repay
         skip(30 days);
@@ -2735,7 +2723,7 @@ contract ComprehensiveTest is Setup {
         vm.startPrank(borrower);
         asset.approve(address(strategy), repayAmt);
 
-        // After repay: debtAmount = borrowAmt - repayAmt, calledDebtAmount = 0
+        // After repay: debtAmount = borrowAmt - repayAmt, calledDebt = 0
         vm.expectEmit(true, true, true, true);
         emit Repaid(borrower, repayAmt, borrowAmt - repayAmt, 0);
 

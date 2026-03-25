@@ -13,7 +13,7 @@ contract OperationTest is Setup {
         assertEq(strategy.totalCollateral(), 0);
         assertEq(strategy.maxDebt(), 0);
         assertEq(strategy.totalDebt(), 0);
-        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
         assertTrue(strategy.isSolvent());
@@ -73,7 +73,7 @@ contract OperationTest is Setup {
         assertEq(strategy.totalCollateral(), 0);
         assertEq(strategy.maxDebt(), liquidity);
         assertEq(strategy.totalDebt(), 0);
-        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.currentLtv(), 0);
         assertTrue(strategy.isHealthy());
     }
@@ -114,7 +114,7 @@ contract OperationTest is Setup {
         strategy.borrow(extraBorrowAmount, borrower);
         vm.stopPrank();
 
-        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), callAmount);
         assertEq(strategy.callDeadline(), 0);
         assertEq(strategy.maxDebt(), borrowAmount - callAmount);
@@ -145,7 +145,7 @@ contract OperationTest is Setup {
         strategy.liquidate(callAmount, liquidator);
         vm.stopPrank();
 
-        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), callAmount);
         assertEq(strategy.callDeadline(), 0);
         assertLt(strategy.totalCollateral(), collateralAmount);

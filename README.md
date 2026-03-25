@@ -2,7 +2,7 @@
 
 This repo will allow you to write, test and deploy V3 "Tokenized Strategies" using [Foundry](https://book.getfoundry.sh/).
 
-You will only need to override the three functions in Strategy.sol of `_deployFunds`, `_freeFunds` and `_harvestAndReport`. With the option to also override `_tend`, `_tendTrigger`, `availableDepositLimit`, `availableWithdrawLimit` and `_emergencyWithdraw` if desired.
+You will only need to override the three functions in `PawnBroker.sol` of `_deployFunds`, `_freeFunds` and `_harvestAndReport`. With the option to also override `_tend`, `_tendTrigger`, `availableDepositLimit`, `availableWithdrawLimit` and `_emergencyWithdraw` if desired.
 
 For a more complete overview of how the Tokenized Strategies work please visit the [TokenizedStrategy Repo](https://github.com/yearn/tokenized-strategy).
 
@@ -54,13 +54,13 @@ NOTE: Compiler defaults to 8.23 but it can be adjusted in the foundry toml.
 
 ## Testing
 
-Due to the nature of the BaseStrategy utilizing an external contract for the majority of its logic, the default interface for any tokenized strategy will not allow proper testing of all functions. Testing of your Strategy should utilize the pre-built [IStrategyInterface](https://github.com/yearn/tokenized-strategy-foundry-mix/blob/master/src/interfaces/IStrategyInterface.sol) to cast any deployed strategy through for testing, as seen in the Setup example. You can add any external functions that you add for your specific strategy to this interface to be able to test all functions with one variable.
+Due to the nature of the BaseStrategy utilizing an external contract for the majority of its logic, the default interface for any tokenized strategy will not allow proper testing of all functions. Testing of your pawn broker should utilize the local [`IPawnBroker`](./src/interfaces/IPawnBroker.sol) interface to cast any deployed pawn broker through for testing, as seen in the Setup example. You can add any external functions that you add for your specific pawn broker to this interface to be able to test all functions with one variable.
 
 Example:
 
 ```solidity
-Strategy _strategy = new Strategy(asset, name);
-IStrategyInterface strategy =  IStrategyInterface(address(_strategy));
+PawnBroker _pawnBroker = new PawnBroker(asset, name);
+IPawnBroker pawnBroker = IPawnBroker(address(_pawnBroker));
 ```
 
 Due to the permissionless nature of the tokenized Strategies, all tests are written without integration with any meta vault funding it. While those tests can be added, all V3 vaults utilize the ERC-4626 standard for deposit/withdraw and accounting, so they can be plugged in easily to any number of different vaults with the same `asset.`

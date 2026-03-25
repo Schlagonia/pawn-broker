@@ -7,8 +7,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 
-/// @notice Fixed-rate single-borrower strategy secured by posted collateral.
-contract Strategy is BaseHooks {
+/// @notice Fixed-rate single-borrower pawn broker secured by posted collateral.
+contract PawnBroker is BaseHooks {
     using SafeERC20 for ERC20;
 
     event CollateralPosted(
@@ -32,7 +32,7 @@ contract Strategy is BaseHooks {
         address indexed caller,
         uint256 amount,
         uint256 debtAmount,
-        uint256 calledDebtAmount
+        uint256 calledDebt
     );
     event DebtCalled(
         address indexed caller,
@@ -83,18 +83,18 @@ contract Strategy is BaseHooks {
     /// @dev The timestamp of the last interest accrual.
     uint256 public lastAccrualTime;
     /// @dev The amount of debt currently under an active repayment call.
-    uint256 public calledDebtAmount;
+    uint256 public calledDebt;
     /// @dev The called debt already repaid and still sitting idle in the strategy.
     uint256 public repaidCalledDebt;
     /// @dev The deadline for the current debt call, or zero when no call is active.
     uint256 public callDeadline;
 
-    /// @dev Addresses allowed to deposit into the strategy.
+    /// @dev Addresses allowed to deposit into the pawn broker.
     mapping(address => bool) internal allowed;
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) internal liquidators;
 
-    /// @notice Deploys a strategy for one borrower, one collateral asset, and one oracle.
+    /// @notice Deploys a pawn broker for one borrower, one collateral asset, and one oracle.
     constructor(
         address _asset,
         string memory _name,
@@ -209,7 +209,7 @@ contract Strategy is BaseHooks {
 
         _applyRepayment(actualRepaid);
 
-        emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebtAmount);
+        emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebt);
     }
 
     /// @notice Withdraws posted collateral when no debt call is active.
@@ -251,11 +251,11 @@ contract Strategy is BaseHooks {
         uint256 _currentDebt = debtAmount;
         require(_currentDebt > 0, "no debt");
 
-        uint256 _availableDebtToCall = _currentDebt - calledDebtAmount;
+        uint256 _availableDebtToCall = _currentDebt - calledDebt;
         uint256 _newlyCalledDebt = Math.min(_amount, _availableDebtToCall);
         require(_newlyCalledDebt > 0, "already fully called");
 
-        calledDebtAmount += _newlyCalledDebt;
+        calledDebt += _newlyCalledDebt;
         if (_newlyCalledDebt >= maxDebt) {
             maxDebt = 0;
         } else {
@@ -263,12 +263,7 @@ contract Strategy is BaseHooks {
         }
         callDeadline = block.timestamp + CALL_DURATION;
 
-        emit DebtCalled(
-            msg.sender,
-            _newlyCalledDebt,
-            calledDebtAmount,
-            callDeadline
-        );
+        emit DebtCalled(msg.sender, _newlyCalledDebt, calledDebt, callDeadline);
     }
 
     /// @notice Repays debt and seizes collateral from a liquidatable position.
@@ -300,7 +295,7 @@ contract Strategy is BaseHooks {
         uint256 _maxRepay = _currentDebt;
         if (_callOverdue && _solvent) {
             // If just overdue but still solvent, repay the called debt.
-            _maxRepay = calledDebtAmount;
+            _maxRepay = calledDebt;
         }
 
         uint256 _positionCollateralValue = _collateralValue(totalCollateral);
@@ -454,14 +449,14 @@ contract Strategy is BaseHooks {
     }
 
     function _applyRepayment(uint256 _amount) internal {
-        uint256 _calledReduction = Math.min(calledDebtAmount, _amount);
+        uint256 _calledReduction = Math.min(calledDebt, _amount);
         if (_calledReduction > 0) {
             // Called debt that gets repaid stays non-borrowable. We track it separately
             // so later withdrawals do not accidentally reopen the line.
-            calledDebtAmount -= _calledReduction;
+            calledDebt -= _calledReduction;
             repaidCalledDebt += _calledReduction;
 
-            if (calledDebtAmount == 0) {
+            if (calledDebt == 0) {
                 callDeadline = 0;
                 emit CallCleared(msg.sender);
             }
@@ -487,7 +482,7 @@ contract Strategy is BaseHooks {
 
     function _isCallOverdue() internal view returns (bool) {
         return
-            calledDebtAmount > 0 &&
+            calledDebt > 0 &&
             callDeadline > 0 &&
             block.timestamp > callDeadline;
     }

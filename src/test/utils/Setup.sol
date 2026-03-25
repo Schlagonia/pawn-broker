@@ -4,9 +4,9 @@ pragma solidity ^0.8.23;
 import {Test} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {ERC20} from "../../Strategy.sol";
-import {StrategyFactory} from "../../StrategyFactory.sol";
-import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
+import {ERC20} from "../../PawnBroker.sol";
+import {PawnBrokerFactory} from "../../PawnBrokerFactory.sol";
+import {IPawnBroker} from "../../interfaces/IPawnBroker.sol";
 import {IMorphoOracle} from "../../interfaces/IMorphoOracle.sol";
 
 import {IEvents} from "@tokenized-strategy/interfaces/IEvents.sol";
@@ -22,8 +22,8 @@ interface IFactory {
 contract Setup is Test, IEvents {
     ERC20 public asset;
     ERC20 public collateral;
-    IStrategyInterface public strategy;
-    StrategyFactory public strategyFactory;
+    IPawnBroker public strategy;
+    PawnBrokerFactory public pawnBrokerFactory;
     IMorphoOracle public collateralOracle;
 
     mapping(string => address) public tokenAddrs;
@@ -62,14 +62,14 @@ contract Setup is Test, IEvents {
             0xd2cC46b9B2D761502eF933320ecf0268EC0dfa6d
         );
 
-        strategyFactory = new StrategyFactory(
+        pawnBrokerFactory = new PawnBrokerFactory(
             management,
             performanceFeeRecipient,
             keeper,
             emergencyAdmin
         );
 
-        strategy = IStrategyInterface(setUpStrategy());
+        strategy = IPawnBroker(setUpPawnBroker());
         factory = strategy.FACTORY();
 
         vm.label(user, "user");
@@ -85,12 +85,12 @@ contract Setup is Test, IEvents {
         vm.label(performanceFeeRecipient, "performanceFeeRecipient");
     }
 
-    function setUpStrategy() public returns (address) {
-        IStrategyInterface _strategy = IStrategyInterface(
+    function setUpPawnBroker() public returns (address) {
+        IPawnBroker _strategy = IPawnBroker(
             address(
-                strategyFactory.newStrategy(
+                pawnBrokerFactory.newPawnBroker(
                     address(asset),
-                    "Vault To Vault Strategy",
+                    "Pawn Broker",
                     borrower,
                     address(collateral),
                     address(collateralOracle),
@@ -160,7 +160,7 @@ contract Setup is Test, IEvents {
     }
 
     function depositIntoStrategy(
-        IStrategyInterface _strategy,
+        IPawnBroker _strategy,
         address _user,
         uint256 _amount
     ) public {
@@ -175,7 +175,7 @@ contract Setup is Test, IEvents {
     }
 
     function mintAndDepositIntoStrategy(
-        IStrategyInterface _strategy,
+        IPawnBroker _strategy,
         address _user,
         uint256 _amount
     ) public {
@@ -193,7 +193,7 @@ contract Setup is Test, IEvents {
     }
 
     function checkStrategyTotals(
-        IStrategyInterface _strategy,
+        IPawnBroker _strategy,
         uint256 _totalAssets,
         uint256 _totalDebt,
         uint256 _totalIdle

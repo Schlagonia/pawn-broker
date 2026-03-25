@@ -3,7 +3,7 @@ pragma solidity ^0.8.23;
 
 import {IStrategy} from "@tokenized-strategy/interfaces/IStrategy.sol";
 
-interface IStrategyInterface is IStrategy {
+interface IPawnBroker is IStrategy {
     /// @notice Sets whether an address may deposit into the strategy.
     function setAllowed(address _owner, bool _isAllowed) external;
 
@@ -41,7 +41,7 @@ interface IStrategyInterface is IStrategy {
     function maxDebt() external view returns (uint256);
 
     /// @notice Returns the remaining debt reduction required by an active debt call.
-    function calledDebtAmount() external view returns (uint256);
+    function calledDebt() external view returns (uint256);
 
     /// @notice Returns the called debt already repaid and still sitting idle in the strategy.
     function repaidCalledDebt() external view returns (uint256);

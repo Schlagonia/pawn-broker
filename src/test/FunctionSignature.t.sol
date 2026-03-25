@@ -41,7 +41,7 @@ contract FunctionSignatureTest is Setup {
 
         assertEq(strategy.totalCollateral(), 0);
         assertEq(strategy.maxDebt(), 0);
-        assertEq(strategy.calledDebtAmount(), 0);
+        assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
         assertEq(strategy.totalDebt(), 0);

@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.23;
 
-import {Strategy} from "./Strategy.sol";
-import {IStrategyInterface} from "./interfaces/IStrategyInterface.sol";
+import {PawnBroker} from "./PawnBroker.sol";
+import {IPawnBroker} from "./interfaces/IPawnBroker.sol";
 
-/// @notice Deploys and tracks strategy instances for unique loan configurations.
-contract StrategyFactory {
-    event NewStrategy(
-        address indexed strategy,
+/// @notice Deploys and tracks pawn broker instances for unique loan configurations.
+contract PawnBrokerFactory {
+    event NewPawnBroker(
+        address indexed pawnBroker,
         address indexed asset,
         address indexed borrower,
         address collateralAsset
     );
 
-    address public immutable emergencyAdmin;
+    address public immutable EMERGENCY_ADMIN;
 
     address public management;
     address public performanceFeeRecipient;
     address public keeper;
 
     mapping(bytes32 => address) public deployments;
-    mapping(address => bool) public deployedStrategies;
+    mapping(address => bool) public deployedPawnBrokers;
 
-    /// @notice Configures the default roles assigned to newly deployed strategies.
+    /// @notice Configures the default roles assigned to newly deployed pawn brokers.
     constructor(
         address _management,
         address _performanceFeeRecipient,
@@ -32,12 +32,12 @@ contract StrategyFactory {
         management = _management;
         performanceFeeRecipient = _performanceFeeRecipient;
         keeper = _keeper;
-        emergencyAdmin = _emergencyAdmin;
+        EMERGENCY_ADMIN = _emergencyAdmin;
     }
 
-    /// @notice Deploys a new strategy for a unique configuration.
-    /// @return The address of the deployed strategy.
-    function newStrategy(
+    /// @notice Deploys a new pawn broker for a unique configuration.
+    /// @return The address of the deployed pawn broker.
+    function newPawnBroker(
         address _asset,
         string calldata _name,
         address _borrower,
@@ -56,11 +56,11 @@ contract StrategyFactory {
             _fixedRateBps,
             _callDuration
         );
-        require(deployments[_key] == address(0), "strategy exists");
+        require(deployments[_key] == address(0), "pawn broker exists");
 
-        IStrategyInterface _newStrategy = IStrategyInterface(
+        IPawnBroker _newPawnBroker = IPawnBroker(
             address(
-                new Strategy(
+                new PawnBroker(
                     _asset,
                     _name,
                     _borrower,
@@ -73,24 +73,24 @@ contract StrategyFactory {
             )
         );
 
-        _newStrategy.setPerformanceFeeRecipient(performanceFeeRecipient);
-        _newStrategy.setKeeper(keeper);
-        _newStrategy.setPendingManagement(management);
-        _newStrategy.setEmergencyAdmin(emergencyAdmin);
+        _newPawnBroker.setPerformanceFeeRecipient(performanceFeeRecipient);
+        _newPawnBroker.setKeeper(keeper);
+        _newPawnBroker.setPendingManagement(management);
+        _newPawnBroker.setEmergencyAdmin(EMERGENCY_ADMIN);
 
-        deployments[_key] = address(_newStrategy);
-        deployedStrategies[address(_newStrategy)] = true;
+        deployments[_key] = address(_newPawnBroker);
+        deployedPawnBrokers[address(_newPawnBroker)] = true;
 
-        emit NewStrategy(
-            address(_newStrategy),
+        emit NewPawnBroker(
+            address(_newPawnBroker),
             _asset,
             _borrower,
             _collateralAsset
         );
-        return address(_newStrategy);
+        return address(_newPawnBroker);
     }
 
-    /// @notice Returns the registry key for a strategy configuration.
+    /// @notice Returns the registry key for a pawn broker configuration.
     function deploymentKey(
         address _asset,
         address _borrower,
@@ -114,8 +114,8 @@ contract StrategyFactory {
             );
     }
 
-    /// @notice Returns the deployed strategy for a configuration, if one exists.
-    function deploymentFor(
+    /// @notice Returns the deployed pawn broker for a configuration, if one exists.
+    function pawnBrokerFor(
         address _asset,
         address _borrower,
         address _collateralAsset,
@@ -138,7 +138,7 @@ contract StrategyFactory {
             ];
     }
 
-    /// @notice Updates the default strategy role addresses.
+    /// @notice Updates the default pawn broker role addresses.
     function setAddresses(
         address _management,
         address _performanceFeeRecipient,
@@ -150,10 +150,10 @@ contract StrategyFactory {
         keeper = _keeper;
     }
 
-    /// @notice Returns whether a strategy address was deployed by this factory.
-    function isDeployedStrategy(
-        address _strategy
+    /// @notice Returns whether a pawn broker address was deployed by this factory.
+    function isDeployedPawnBroker(
+        address _pawnBroker
     ) external view returns (bool) {
-        return deployedStrategies[_strategy];
+        return deployedPawnBrokers[_pawnBroker];
     }
 }

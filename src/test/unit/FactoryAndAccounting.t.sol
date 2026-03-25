@@ -6,11 +6,11 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {TokenizedStrategy} from "@tokenized-strategy/TokenizedStrategy.sol";
 
-import {StrategyFactory} from "../../StrategyFactory.sol";
-import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
+import {PawnBrokerFactory} from "../../PawnBrokerFactory.sol";
+import {IPawnBroker} from "../../interfaces/IPawnBroker.sol";
 import {MockMorphoOracle} from "../mocks/MockMorphoOracle.sol";
 
-interface IHealthCheckStrategy is IStrategyInterface {
+interface IHealthCheckStrategy is IPawnBroker {
     function setDoHealthCheck(bool _doHealthCheck) external;
 }
 
@@ -61,7 +61,7 @@ abstract contract LocalSetup is Test {
     MockERC20 internal asset;
     MockERC20 internal collateral;
     MockMorphoOracle internal oracle;
-    StrategyFactory internal strategyFactory;
+    PawnBrokerFactory internal pawnBrokerFactory;
     IHealthCheckStrategy internal strategy;
 
     function setUp() public virtual {
@@ -76,7 +76,7 @@ abstract contract LocalSetup is Test {
         oracle = new MockMorphoOracle();
         oracle.setPrice(INITIAL_ORACLE_PRICE);
 
-        strategyFactory = new StrategyFactory(
+        pawnBrokerFactory = new PawnBrokerFactory(
             management,
             performanceFeeRecipient,
             keeper,
@@ -84,9 +84,9 @@ abstract contract LocalSetup is Test {
         );
 
         strategy = IHealthCheckStrategy(
-            strategyFactory.newStrategy(
+            pawnBrokerFactory.newPawnBroker(
                 address(asset),
-                "Unit Strategy",
+                "Unit PawnBroker",
                 borrower,
                 address(collateral),
                 address(oracle),
@@ -123,10 +123,12 @@ abstract contract LocalSetup is Test {
 }
 
 contract FactoryRegistryTest is LocalSetup {
-    function test_isDeployedStrategy_tracksEveryStrategyForSameAsset() public {
-        address secondStrategy = strategyFactory.newStrategy(
+    function test_isDeployedPawnBroker_tracksEveryPawnBrokerForSameAsset()
+        public
+    {
+        address secondStrategy = pawnBrokerFactory.newPawnBroker(
             address(asset),
-            "Unit Strategy 2",
+            "Unit PawnBroker 2",
             secondBorrower,
             address(collateral),
             address(oracle),
@@ -135,11 +137,11 @@ contract FactoryRegistryTest is LocalSetup {
             CALL_DURATION
         );
 
-        assertTrue(strategyFactory.isDeployedStrategy(address(strategy)));
-        assertTrue(strategyFactory.isDeployedStrategy(secondStrategy));
+        assertTrue(pawnBrokerFactory.isDeployedPawnBroker(address(strategy)));
+        assertTrue(pawnBrokerFactory.isDeployedPawnBroker(secondStrategy));
 
         assertEq(
-            strategyFactory.deploymentFor(
+            pawnBrokerFactory.pawnBrokerFor(
                 address(asset),
                 borrower,
                 address(collateral),
@@ -152,7 +154,7 @@ contract FactoryRegistryTest is LocalSetup {
         );
 
         assertEq(
-            strategyFactory.deploymentFor(
+            pawnBrokerFactory.pawnBrokerFor(
                 address(asset),
                 secondBorrower,
                 address(collateral),
@@ -165,11 +167,11 @@ contract FactoryRegistryTest is LocalSetup {
         );
     }
 
-    function test_newStrategy_rejectsDuplicateConfig() public {
-        vm.expectRevert("strategy exists");
-        strategyFactory.newStrategy(
+    function test_newPawnBroker_rejectsDuplicateConfig() public {
+        vm.expectRevert("pawn broker exists");
+        pawnBrokerFactory.newPawnBroker(
             address(asset),
-            "Duplicate Strategy",
+            "Duplicate PawnBroker",
             borrower,
             address(collateral),
             address(oracle),
@@ -234,7 +236,7 @@ contract BorrowerRepairTest is LocalSetup {
         vm.stopPrank();
 
         assertEq(actualRepaid, partialRepayAmount);
-        assertEq(strategy.calledDebtAmount(), callAmount - partialRepayAmount);
+        assertEq(strategy.calledDebt(), callAmount - partialRepayAmount);
         assertEq(strategy.repaidCalledDebt(), partialRepayAmount);
         assertEq(strategy.maxDebt(), liquidity - callAmount);
         assertGt(strategy.callDeadline(), 0);
