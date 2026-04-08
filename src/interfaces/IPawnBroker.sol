@@ -25,6 +25,11 @@ interface IPawnBroker is IStrategy {
     /// @notice Calls debt and starts the repayment deadline window.
     function callDebt(uint256 _amount) external;
 
+    /// @notice Calls debt according to the caller's current strategy shares.
+    function callDebtByShares(
+        uint256 _shares
+    ) external returns (uint256 debtCalled);
+
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     function liquidate(
         uint256 _repayAmount,
@@ -43,8 +48,14 @@ interface IPawnBroker is IStrategy {
     /// @notice Returns the remaining debt reduction required by an active debt call.
     function calledDebt() external view returns (uint256);
 
-    /// @notice Returns the called debt already repaid and still sitting idle in the strategy.
+    /// @notice Returns repaid called debt still sitting idle in the strategy.
     function repaidCalledDebt() external view returns (uint256);
+
+    /// @notice Returns the caller's shares frozen after a depositor debt call.
+    function calledShares(address _owner) external view returns (uint256);
+
+    /// @notice Returns the caller's currently callable unlocked shares.
+    function maxCallableShares(address _owner) external view returns (uint256);
 
     /// @notice Returns the active call deadline, or zero when no call is active.
     function callDeadline() external view returns (uint256);

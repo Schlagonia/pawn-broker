@@ -49,6 +49,13 @@ contract PawnBroker is BaseHooks {
         uint256 debtAmount,
         uint256 totalCollateral
     );
+    event DepositorDebtCalled(
+        address indexed caller,
+        uint256 shares,
+        uint256 debtAmount,
+        uint256 totalCalledDebt,
+        uint256 deadline
+    );
     event UpdateAllowed(address indexed owner, bool isAllowed);
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
 
@@ -93,6 +100,8 @@ contract PawnBroker is BaseHooks {
     mapping(address => bool) internal allowed;
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) internal liquidators;
+    /// @dev The caller's exact shares frozen after a depositor debt call.
+    mapping(address => uint256) public calledShares;
 
     /// @notice Deploys a pawn broker for one borrower, one collateral asset, and one oracle.
     constructor(
@@ -171,7 +180,7 @@ contract PawnBroker is BaseHooks {
         require(!TokenizedStrategy.isShutdown(), "shutdown");
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
-        require(callDeadline == 0, "debt called");
+        require(calledDebt == 0, "debt called");
         require(
             asset.balanceOf(address(this)) >= _amount,
             "insufficient liquidity"
@@ -221,7 +230,7 @@ contract PawnBroker is BaseHooks {
     ) external onlyBorrower {
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
-        require(callDeadline == 0, "debt called");
+        require(calledDebt == 0, "debt called");
         require(_amount <= totalCollateral, "insufficient collateral");
 
         _accrueInterest();
@@ -244,26 +253,46 @@ contract PawnBroker is BaseHooks {
     /// @notice Calls debt and starts the repayment deadline window.
     /// @param _amount The additional amount of debt to call.
     function callDebt(uint256 _amount) external onlyManagement {
-        require(_amount > 0, "zero amount");
-
         _accrueInterest();
 
         uint256 _currentDebt = debtAmount;
-        require(_currentDebt > 0, "no debt");
-
         uint256 _availableDebtToCall = _currentDebt - calledDebt;
         uint256 _newlyCalledDebt = Math.min(_amount, _availableDebtToCall);
         require(_newlyCalledDebt > 0, "already fully called");
 
-        calledDebt += _newlyCalledDebt;
-        if (_newlyCalledDebt >= maxDebt) {
-            maxDebt = 0;
-        } else {
-            maxDebt -= _newlyCalledDebt;
-        }
-        callDeadline = block.timestamp + CALL_DURATION;
+        _recordDebtCall(_newlyCalledDebt);
 
         emit DebtCalled(msg.sender, _newlyCalledDebt, calledDebt, callDeadline);
+    }
+
+    /// @notice Calls debt according to the caller's current strategy shares.
+    /// @param _shares The amount of unlocked shares to lock and use for the call.
+    /// @return debtCalled The amount of borrower debt called by the depositor.
+    function callDebtByShares(
+        uint256 _shares
+    ) external returns (uint256 debtCalled) {
+        require(_shares > 0, "zero shares");
+
+        _accrueInterest();
+
+        uint256 _currentDebt = debtAmount;
+        uint256 _callableShares = maxCallableShares(msg.sender);
+        require(_shares <= _callableShares, "insufficient unlocked shares");
+
+        uint256 _totalSupply = TokenizedStrategy.totalSupply();
+        debtCalled = Math.mulDiv(_currentDebt, _shares, _totalSupply);
+        require(debtCalled > 0, "call too small");
+
+        calledShares[msg.sender] += _shares;
+        _recordDebtCall(debtCalled);
+
+        emit DepositorDebtCalled(
+            msg.sender,
+            _shares,
+            debtCalled,
+            calledDebt,
+            callDeadline
+        );
     }
 
     /// @notice Repays debt and seizes collateral from a liquidatable position.
@@ -334,6 +363,32 @@ contract PawnBroker is BaseHooks {
         return debtAmount + _previewInterest();
     }
 
+    /// @notice Returns the caller's currently callable unlocked shares.
+    function maxCallableShares(address _owner) public view returns (uint256) {
+        uint256 _balance = TokenizedStrategy.balanceOf(_owner);
+        uint256 _lockedShares = calledShares[_owner];
+        if (_lockedShares >= _balance) return 0;
+
+        uint256 _currentDebt = totalDebt();
+        if (_currentDebt == 0) return 0;
+
+        uint256 _remainingDebtToCall = _currentDebt > calledDebt
+            ? _currentDebt - calledDebt
+            : 0;
+        if (_remainingDebtToCall == 0) return 0;
+
+        uint256 _totalSupply = TokenizedStrategy.totalSupply();
+        if (_totalSupply == 0) return 0;
+
+        uint256 _sharesBackedByRemainingDebt = Math.mulDiv(
+            _remainingDebtToCall,
+            _totalSupply,
+            _currentDebt
+        );
+
+        return Math.min(_balance - _lockedShares, _sharesBackedByRemainingDebt);
+    }
+
     /// @notice Returns whether the current position is within the configured LLTV.
     function isSolvent() public view returns (bool) {
         return _isSolventAt(totalDebt(), totalCollateral);
@@ -370,9 +425,14 @@ contract PawnBroker is BaseHooks {
 
     /// @notice Returns the amount of idle base asset currently withdrawable from the strategy.
     function availableWithdrawLimit(
-        address
+        address _owner
     ) public view override returns (uint256) {
-        return asset.balanceOf(address(this));
+        uint256 _balance = TokenizedStrategy.balanceOf(_owner);
+        return
+            Math.min(
+                asset.balanceOf(address(this)),
+                TokenizedStrategy.convertToAssets(_balance)
+            );
     }
 
     function _postDepositHook(
@@ -385,12 +445,18 @@ contract PawnBroker is BaseHooks {
 
     function _postWithdrawHook(
         uint256 _assets,
-        uint256,
+        uint256 _shares,
         address,
-        address,
+        address _owner,
         uint256
     ) internal override {
         if (_assets == 0) return;
+
+        uint256 _calledShares = calledShares[_owner];
+        if (_calledShares > 0 && _shares > 0) {
+            uint256 _calledSharesConsumed = Math.min(_calledShares, _shares);
+            calledShares[_owner] = _calledShares - _calledSharesConsumed;
+        }
 
         uint256 _currentDebt = totalDebt();
         // Only idle above current debt headroom is borrowable. If a withdrawal
@@ -449,20 +515,26 @@ contract PawnBroker is BaseHooks {
     }
 
     function _applyRepayment(uint256 _amount) internal {
-        uint256 _calledReduction = Math.min(calledDebt, _amount);
-        if (_calledReduction > 0) {
+        uint256 _calledRepayment = Math.min(_amount, calledDebt);
+        if (_calledRepayment > 0) {
             // Called debt that gets repaid stays non-borrowable. We track it separately
             // so later withdrawals do not accidentally reopen the line.
-            calledDebt -= _calledReduction;
-            repaidCalledDebt += _calledReduction;
-
-            if (calledDebt == 0) {
-                callDeadline = 0;
-                emit CallCleared(msg.sender);
-            }
+            calledDebt -= _calledRepayment;
+            repaidCalledDebt += _calledRepayment;
         }
 
         debtAmount -= _amount;
+        _clearCallIfSatisfied();
+    }
+
+    function _recordDebtCall(uint256 _amount) internal {
+        calledDebt += _amount;
+        if (_amount >= maxDebt) {
+            maxDebt = 0;
+        } else {
+            maxDebt -= _amount;
+        }
+        callDeadline = block.timestamp + CALL_DURATION;
     }
 
     function _isSolventAt(
@@ -517,6 +589,28 @@ contract PawnBroker is BaseHooks {
         uint256 _oraclePrice = ORACLE.price();
         require(_oraclePrice > 0, "zero oracle price");
         return _oraclePrice;
+    }
+
+    function _clearCallIfSatisfied() internal {
+        if (calledDebt == 0 && callDeadline != 0) {
+            callDeadline = 0;
+            emit CallCleared(msg.sender);
+        }
+    }
+
+    function _preTransferHook(
+        address _from,
+        address,
+        uint256 _amount
+    ) internal view override {
+        uint256 _lockedShares = calledShares[_from];
+        if (_lockedShares == 0) return;
+
+        uint256 _balance = TokenizedStrategy.balanceOf(_from);
+        uint256 _unlockedShares = _lockedShares >= _balance
+            ? 0
+            : _balance - _lockedShares;
+        require(_amount <= _unlockedShares, "locked called shares");
     }
 
     /// @notice Rescues unrelated tokens accidentally sent to the strategy.

@@ -346,3 +346,165 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(strategy.maxDebt(), depositAmount);
     }
 }
+
+contract DepositorSelfCallTest is LocalSetup {
+    address internal otherDepositor = address(0x800);
+
+    function test_callDebtByShares_locksSharesAndReducesBorrowHeadroom()
+        public
+    {
+        uint256 depositAmount = 100e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 20e18;
+        uint256 calledShares = 50e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        uint256 debtCalled = strategy.callDebtByShares(calledShares);
+
+        assertEq(debtCalled, 10e18);
+        assertEq(strategy.calledShares(user), calledShares);
+        assertEq(strategy.calledDebt(), debtCalled);
+        assertEq(strategy.maxCallableShares(user), calledShares);
+        assertEq(strategy.maxDebt(), depositAmount - debtCalled);
+        assertGt(strategy.callDeadline(), 0);
+    }
+
+    function test_callDebtByShares_usesRemainingCallableSupply() public {
+        uint256 depositAmount = 50e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 20e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _allowAndDeposit(otherDepositor, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        uint256 firstCall = strategy.callDebtByShares(depositAmount);
+
+        vm.prank(otherDepositor);
+        uint256 secondCall = strategy.callDebtByShares(depositAmount);
+
+        assertEq(firstCall, 10e18);
+        assertEq(secondCall, 10e18);
+        assertEq(strategy.calledDebt(), borrowAmount);
+    }
+
+    function test_callDebtByShares_blocksTransferOfLockedShares() public {
+        uint256 depositAmount = 100e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 20e18;
+        uint256 calledShares = 50e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        strategy.callDebtByShares(calledShares);
+
+        vm.prank(user);
+        assertTrue(strategy.transfer(otherDepositor, 50e18));
+
+        vm.prank(user);
+        vm.expectRevert("locked called shares");
+        strategy.transfer(otherDepositor, 1);
+    }
+
+    function test_repayLeavesCalledSharesFrozenUntilRedeemed() public {
+        uint256 depositAmount = 100e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 20e18;
+        uint256 calledShares = 50e18;
+        uint256 repayAmount = 4e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        strategy.callDebtByShares(calledShares);
+
+        asset.mint(borrower, repayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), repayAmount);
+        strategy.repay(repayAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.calledDebt(), 6e18);
+        assertEq(strategy.calledShares(user), calledShares);
+        assertEq(strategy.availableWithdrawLimit(user), 84e18);
+
+        vm.prank(user);
+        uint256 assetsOut = strategy.redeem(calledShares, user, user);
+
+        assertEq(assetsOut, calledShares);
+        assertEq(strategy.balanceOf(user), 50e18);
+        assertEq(strategy.calledShares(user), 0);
+        assertEq(strategy.calledDebt(), 6e18);
+    }
+
+    function test_repayTreatsManagementAndDepositorCallsAsSingleBucket()
+        public
+    {
+        uint256 depositAmount = 100e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 40e18;
+        uint256 borrowerRepay = 15e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        strategy.callDebtByShares(50e18);
+
+        vm.prank(management);
+        strategy.callDebt(10e18);
+
+        asset.mint(borrower, borrowerRepay);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), borrowerRepay);
+        strategy.repay(borrowerRepay);
+        vm.stopPrank();
+
+        assertEq(strategy.calledDebt(), 15e18);
+        assertEq(strategy.calledShares(user), 50e18);
+        assertEq(strategy.repaidCalledDebt(), 15e18);
+    }
+
+    function test_redeemConsumesCalledSharesBeforeUnlockedShares() public {
+        uint256 depositAmount = 50e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 40e18;
+        uint256 calledShareAmount = 25e18;
+
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(user);
+        strategy.callDebtByShares(calledShareAmount);
+
+        vm.prank(user);
+        strategy.redeem(10e18, user, user);
+
+        assertEq(strategy.calledShares(user), 15e18);
+    }
+}

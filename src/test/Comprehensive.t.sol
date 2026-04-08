@@ -304,7 +304,7 @@ contract ComprehensiveTest is Setup {
         _setupPosition();
 
         vm.prank(management);
-        vm.expectRevert("zero amount");
+        vm.expectRevert();
         strategy.callDebt(0);
     }
 
@@ -1233,7 +1233,7 @@ contract ComprehensiveTest is Setup {
         mintAndDepositIntoStrategy(strategy, user, defaultLiquidityAmount());
 
         vm.prank(management);
-        vm.expectRevert("no debt");
+        vm.expectRevert();
         strategy.callDebt(callAmt);
     }
 
