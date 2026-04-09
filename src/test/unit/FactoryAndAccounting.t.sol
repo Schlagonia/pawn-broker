@@ -272,6 +272,17 @@ contract BorrowerRepairTest is LocalSetup {
 }
 
 contract MaxDebtAccountingTest is LocalSetup {
+    function _openFullUtilizedPosition(
+        uint256 depositAmount,
+        uint256 collateralAmount
+    ) internal {
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(depositAmount, borrower);
+    }
+
     function test_depositAndWithdrawUpdateMaxDebtThroughHooks() public {
         uint256 depositAmount = 10_000e18;
         uint256 withdrawAmount = 2_000e18;
@@ -317,6 +328,139 @@ contract MaxDebtAccountingTest is LocalSetup {
 
         assertEq(strategy.maxDebt(), depositAmount - callAmount);
         assertEq(strategy.repaidCalledDebt(), 0);
+    }
+
+    function test_fullUtilizationPartialRepayThenFullIdleWithdrawCutsMaxDebt()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 partialRepayAmount = 2_000e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        asset.mint(borrower, partialRepayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), partialRepayAmount);
+        strategy.repay(partialRepayAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.totalDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.maxDebt(), depositAmount);
+        assertEq(asset.balanceOf(address(strategy)), partialRepayAmount);
+
+        vm.prank(user);
+        strategy.withdraw(partialRepayAmount, user, user);
+
+        assertEq(strategy.maxDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.totalDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.repaidCalledDebt(), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
+    }
+
+    function test_fullUtilizationFullRepayIncludingInterestThenFullWithdrawZerosMaxDebt()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        skip(365 days);
+
+        uint256 totalOwed = strategy.totalDebt();
+        assertGt(totalOwed, depositAmount);
+
+        asset.mint(borrower, totalOwed);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), totalOwed);
+        strategy.repay(totalOwed);
+        vm.stopPrank();
+
+        assertEq(strategy.totalDebt(), 0);
+        assertEq(asset.balanceOf(address(strategy)), totalOwed);
+
+        vm.startPrank(management);
+        strategy.setPerformanceFee(0);
+        strategy.setProfitMaxUnlockTime(0);
+        vm.stopPrank();
+
+        vm.prank(keeper);
+        strategy.report();
+
+        uint256 userShares = strategy.balanceOf(user);
+        vm.prank(user);
+        strategy.redeem(userShares, user, user);
+
+        assertEq(strategy.maxDebt(), 0);
+        assertEq(strategy.totalDebt(), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
+    }
+
+    function test_fullUtilizationPartialCallRepayCallThenFullIdleWithdrawDoesNotDoubleCutMaxDebt()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 callAmount = 4_000e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        asset.mint(borrower, callAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), callAmount);
+        strategy.repay(callAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.calledDebt(), 0);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
+        assertEq(asset.balanceOf(address(strategy)), callAmount);
+
+        vm.prank(user);
+        strategy.withdraw(callAmount, user, user);
+
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.totalDebt(), depositAmount - callAmount);
+        assertEq(strategy.repaidCalledDebt(), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
+    }
+
+    function test_fullUtilizationFullCallPartialRepayThenFullIdleWithdrawKeepsMaxDebtAtZero()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 partialRepayAmount = 4_000e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        vm.prank(management);
+        strategy.callDebt(depositAmount);
+
+        asset.mint(borrower, partialRepayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), partialRepayAmount);
+        strategy.repay(partialRepayAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.maxDebt(), 0);
+        assertEq(strategy.calledDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.repaidCalledDebt(), partialRepayAmount);
+        assertGt(strategy.callDeadline(), 0);
+
+        vm.prank(user);
+        strategy.withdraw(partialRepayAmount, user, user);
+
+        assertEq(strategy.maxDebt(), 0);
+        assertEq(strategy.totalDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.calledDebt(), depositAmount - partialRepayAmount);
+        assertEq(strategy.repaidCalledDebt(), 0);
+        assertGt(strategy.callDeadline(), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
     function test_withdrawOfRepaidInterestDoesNotReduceMaxDebt() public {

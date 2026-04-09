@@ -49,7 +49,6 @@ contract PawnBroker is BaseHooks {
         uint256 debtAmount,
         uint256 totalCollateral
     );
-    event UpdateAllowed(address indexed owner, bool isAllowed);
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
 
     modifier onlyBorrower() {
@@ -89,8 +88,6 @@ contract PawnBroker is BaseHooks {
     /// @dev The deadline for the current debt call, or zero when no call is active.
     uint256 public callDeadline;
 
-    /// @dev Addresses allowed to deposit into the pawn broker.
-    mapping(address => bool) internal allowed;
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) internal liquidators;
 
@@ -124,16 +121,6 @@ contract PawnBroker is BaseHooks {
     ////////////////////////////////////////////////////////////////
     //                        SETTER FUNCTIONS                     //
     ////////////////////////////////////////////////////////////////
-
-    /// @notice Sets whether an address may deposit into the strategy.
-    function setAllowed(
-        address _owner,
-        bool _isAllowed
-    ) external onlyManagement {
-        require(_owner != address(0), "zero owner");
-        allowed[_owner] = _isAllowed;
-        emit UpdateAllowed(_owner, _isAllowed);
-    }
 
     /// @notice Sets whether an address may liquidate unhealthy or overdue debt.
     function setLiquidator(
@@ -172,23 +159,19 @@ contract PawnBroker is BaseHooks {
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
-        require(
-            asset.balanceOf(address(this)) >= _amount,
-            "insufficient liquidity"
-        );
 
-        _accrueInterest();
-
-        debtAmount += _amount;
-        require(debtAmount <= maxDebt, "max debt");
+        uint256 _currentDebt = _accrueInterest();
+        uint256 _newDebt = _currentDebt + _amount;
+        require(_newDebt <= maxDebt, "max debt");
         require(
-            _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
+            _isSolventAt(_newDebt, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
+        debtAmount = _newDebt;
 
         asset.safeTransfer(_receiver, _amount);
 
-        emit Borrowed(msg.sender, _receiver, _amount, debtAmount);
+        emit Borrowed(msg.sender, _receiver, _amount, _newDebt);
     }
 
     /// @notice Repays outstanding debt.
@@ -199,9 +182,7 @@ contract PawnBroker is BaseHooks {
     ) external onlyBorrower returns (uint256 actualRepaid) {
         require(_amount > 0, "zero amount");
 
-        _accrueInterest();
-
-        uint256 _currentDebt = debtAmount;
+        uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");
 
         actualRepaid = Math.min(_amount, _currentDebt);
@@ -224,11 +205,11 @@ contract PawnBroker is BaseHooks {
         require(callDeadline == 0, "debt called");
         require(_amount <= totalCollateral, "insufficient collateral");
 
-        _accrueInterest();
+        uint256 _currentDebt = _accrueInterest();
 
         totalCollateral -= _amount;
         require(
-            _isSolventAt(debtAmount, totalCollateral) && !_isCallOverdue(),
+            _isSolventAt(_currentDebt, totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
         ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
@@ -246,9 +227,7 @@ contract PawnBroker is BaseHooks {
     function callDebt(uint256 _amount) external onlyManagement {
         require(_amount > 0, "zero amount");
 
-        _accrueInterest();
-
-        uint256 _currentDebt = debtAmount;
+        uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");
 
         uint256 _availableDebtToCall = _currentDebt - calledDebt;
@@ -283,30 +262,27 @@ contract PawnBroker is BaseHooks {
             "not liquidator"
         );
 
-        _accrueInterest();
-
-        uint256 _currentDebt = debtAmount;
+        uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");
 
+        uint256 _currentCollateral = totalCollateral;
         bool _callOverdue = _isCallOverdue();
-        bool _solvent = _isSolventAt(_currentDebt, totalCollateral);
+        bool _solvent = _isSolventAt(_currentDebt, _currentCollateral);
         require(_callOverdue || !_solvent, "not liquidatable");
 
         uint256 _maxRepay = _currentDebt;
-        if (_callOverdue && _solvent) {
-            // If just overdue but still solvent, repay the called debt.
-            _maxRepay = calledDebt;
-        }
+        // If just overdue but still solvent, repay the called debt.
+        if (_solvent) _maxRepay = calledDebt;
 
-        uint256 _positionCollateralValue = _collateralValue(totalCollateral);
+        uint256 _positionCollateralValue = _collateralValue(_currentCollateral);
         _maxRepay = Math.min(_maxRepay, _positionCollateralValue);
         actualRepaid = Math.min(_repayAmount, _maxRepay);
         require(actualRepaid > 0, "repay too small");
 
         collateralSeized = _loanToCollateral(actualRepaid);
         require(collateralSeized > 0, "seize too small");
-        if (collateralSeized > totalCollateral)
-            collateralSeized = totalCollateral;
+        if (collateralSeized > _currentCollateral)
+            collateralSeized = _currentCollateral;
 
         asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
@@ -426,14 +402,14 @@ contract PawnBroker is BaseHooks {
 
     function _freeFunds(uint256) internal pure override {}
 
-    function _harvestAndReport() internal view override returns (uint256) {
-        uint256 _currentDebt = totalDebt();
-        uint256 _totalAssets = asset.balanceOf(address(this));
+    function _harvestAndReport() internal override returns (uint256) {
+        uint256 _currentDebt = _accrueInterest();
+        uint256 _idleAssets = asset.balanceOf(address(this));
 
-        if (_currentDebt == 0 || totalCollateral == 0) return _totalAssets;
+        if (_currentDebt == 0 || totalCollateral == 0) return _idleAssets;
 
         return
-            _totalAssets +
+            _idleAssets +
             Math.min(_currentDebt, _collateralValue(totalCollateral));
     }
 
@@ -441,10 +417,11 @@ contract PawnBroker is BaseHooks {
     //                        INTERNAL FUNCTIONS                   //
     ////////////////////////////////////////////////////////////////
 
-    function _accrueInterest() internal {
-        uint256 _accruedInterest = _previewInterest();
-        if (_accruedInterest > 0) debtAmount += _accruedInterest;
+    function _accrueInterest() internal returns (uint256 _newDebt) {
+        _newDebt = debtAmount;
+        _newDebt += _previewInterest();
 
+        debtAmount = _newDebt;
         lastAccrualTime = block.timestamp;
     }
 
@@ -524,6 +501,7 @@ contract PawnBroker is BaseHooks {
         require(_receiver != address(0), "zero receiver");
         require(_token != address(asset), "cannot rescue asset");
         require(_token != COLLATERAL_ASSET, "cannot rescue collateral");
+        require(_token != address(this), "cannot rescue self");
 
         ERC20(_token).safeTransfer(
             _receiver,

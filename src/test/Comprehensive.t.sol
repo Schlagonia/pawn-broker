@@ -335,12 +335,6 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
     }
 
-    function test_setAllowedRevertsOnZeroAddress() public {
-        vm.prank(management);
-        vm.expectRevert("zero owner");
-        strategy.setAllowed(address(0), true);
-    }
-
     function test_setLiquidatorRevertsOnZeroAddress() public {
         vm.prank(management);
         vm.expectRevert("zero liquidator");
@@ -768,7 +762,7 @@ contract ComprehensiveTest is Setup {
         postCollateral(collateralAmt);
 
         vm.prank(borrower);
-        vm.expectRevert("insufficient liquidity");
+        vm.expectRevert("max debt");
         strategy.borrow(smallDeposit + 1, borrower);
     }
 
@@ -2793,14 +2787,6 @@ contract ComprehensiveTest is Setup {
 
         strategy.liquidate(callAmount, liquidator);
         vm.stopPrank();
-    }
-
-    function test_setAllowedEmitsEvent() public {
-        vm.expectEmit(true, true, true, true);
-        emit UpdateAllowed(user, true);
-
-        vm.prank(management);
-        strategy.setAllowed(user, true);
     }
 
     function test_setLiquidatorEmitsEvent() public {
