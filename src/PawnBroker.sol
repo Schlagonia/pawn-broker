@@ -61,27 +61,28 @@ contract PawnBroker is BaseHooks {
     uint256 public constant SECONDS_PER_YEAR = 365 days;
 
     /// @dev The only address allowed to post collateral, borrow, repay, and pull collateral.
-    address internal immutable BORROWER;
+    address public immutable BORROWER;
     /// @dev The collateral token backing the borrower position.
-    address internal immutable COLLATERAL_ASSET;
+    address public immutable COLLATERAL_ASSET;
     /// @dev The oracle used to convert collateral into base-asset value.
-    IMorphoOracle internal immutable ORACLE;
+    IMorphoOracle public immutable ORACLE;
     /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
-    uint256 internal immutable LLTV;
+    uint256 public immutable LLTV;
     /// @dev The fixed annualized interest rate charged on debt, in basis points.
-    uint256 internal immutable FIXED_RATE;
+    uint256 public immutable FIXED_RATE;
     /// @dev The time window the borrower has to satisfy an active debt call.
-    uint256 internal immutable CALL_DURATION;
+    uint256 public immutable CALL_DURATION;
 
     /// @dev The amount of collateral currently posted by the borrower.
     uint256 public totalCollateral;
-    /// @dev The current global debt ceiling available to the borrower.
+    /// @dev The current borrowable debt ceiling. Called debt is excluded.
     uint256 public maxDebt;
     /// @dev The stored compounded debt balance after the last accrual update.
     uint256 internal debtAmount;
     /// @dev The timestamp of the last interest accrual.
     uint256 public lastAccrualTime;
     /// @dev The amount of debt currently under an active repayment call.
+    /// Fully called positions keep accruing into this bucket until the call is cleared.
     uint256 public calledDebt;
     /// @dev The called debt already repaid and still sitting idle in the strategy.
     uint256 public repaidCalledDebt;
@@ -89,7 +90,7 @@ contract PawnBroker is BaseHooks {
     uint256 public callDeadline;
 
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
-    mapping(address => bool) internal liquidators;
+    mapping(address => bool) public liquidators;
 
     /// @notice Deploys a pawn broker for one borrower, one collateral asset, and one oracle.
     constructor(
@@ -368,33 +369,14 @@ contract PawnBroker is BaseHooks {
     ) internal override {
         if (_assets == 0) return;
 
-        uint256 _currentDebt = totalDebt();
-        // Only idle above current debt headroom is borrowable. If a withdrawal
-        // pulls that borrowable idle down, the global debt ceiling needs to ratchet down too.
-        uint256 _borrowableIdle = maxDebt > _currentDebt
-            ? maxDebt - _currentDebt
-            : 0;
-        uint256 _idleAfter = asset.balanceOf(address(this));
-        uint256 _maxDebtReduction = _borrowableIdle > _idleAfter
-            ? _borrowableIdle - _idleAfter
-            : 0;
-
-        if (_maxDebtReduction > 0) {
-            maxDebt -= _maxDebtReduction;
+        uint256 _repaidCalledConsumed = Math.min(repaidCalledDebt, _assets);
+        if (_repaidCalledConsumed > 0) {
+            repaidCalledDebt -= _repaidCalledConsumed;
         }
 
-        uint256 _nonBorrowableConsumed = _assets - _maxDebtReduction;
-
-        if (_nonBorrowableConsumed > 0) {
-            // Called debt that was already repaid lives as idle cash inside the strategy.
-            // Withdrawing that cash should burn this bucket, not ratchet maxDebt down again.
-            uint256 _repaidCalledConsumed = Math.min(
-                repaidCalledDebt,
-                _nonBorrowableConsumed
-            );
-            if (_repaidCalledConsumed > 0) {
-                repaidCalledDebt -= _repaidCalledConsumed;
-            }
+        uint256 _borrowableConsumed = _assets - _repaidCalledConsumed;
+        if (_borrowableConsumed > 0) {
+            maxDebt -= _borrowableConsumed;
         }
     }
 
@@ -419,7 +401,18 @@ contract PawnBroker is BaseHooks {
 
     function _accrueInterest() internal returns (uint256 _newDebt) {
         _newDebt = debtAmount;
-        _newDebt += _previewInterest();
+        uint256 _accruedInterest = _previewInterest();
+        if (_accruedInterest > 0) {
+            if (calledDebt == _newDebt) {
+                // Fully called positions keep accruing into this bucket until the call is cleared.
+                calledDebt += _accruedInterest;
+            } else {
+                // Partial calls stay fixed at the requested amount.
+                maxDebt += _accruedInterest;
+            }
+
+            _newDebt += _accruedInterest;
+        }
 
         debtAmount = _newDebt;
         lastAccrualTime = block.timestamp;

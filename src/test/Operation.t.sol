@@ -10,6 +10,13 @@ contract OperationTest is Setup {
         assertEq(strategy.management(), management);
         assertEq(strategy.performanceFeeRecipient(), performanceFeeRecipient);
         assertEq(strategy.keeper(), keeper);
+        assertEq(strategy.BORROWER(), borrower);
+        assertEq(strategy.COLLATERAL_ASSET(), address(collateral));
+        assertEq(address(strategy.ORACLE()), address(collateralOracle));
+        assertEq(strategy.LLTV(), lltv);
+        assertEq(strategy.FIXED_RATE(), fixedRate);
+        assertEq(strategy.CALL_DURATION(), callDuration);
+        assertFalse(strategy.liquidators(liquidator));
         assertEq(strategy.totalCollateral(), 0);
         assertEq(strategy.maxDebt(), 0);
         assertEq(strategy.totalDebt(), 0);
@@ -62,6 +69,7 @@ contract OperationTest is Setup {
         skip(30 days);
 
         uint256 repayAmount = strategy.totalDebt();
+        uint256 interestAmount = repayAmount - borrowAmount;
 
         airdrop(asset, borrower, repayAmount);
         vm.startPrank(borrower);
@@ -71,7 +79,7 @@ contract OperationTest is Setup {
         vm.stopPrank();
 
         assertEq(strategy.totalCollateral(), 0);
-        assertEq(strategy.maxDebt(), liquidity);
+        assertEq(strategy.maxDebt(), liquidity + interestAmount);
         assertEq(strategy.totalDebt(), 0);
         assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.currentLtv(), 0);
@@ -138,16 +146,17 @@ contract OperationTest is Setup {
         skip(callDuration + 1);
 
         setLiquidator(liquidator, true);
-        airdrop(asset, liquidator, callAmount);
+        airdrop(asset, liquidator, borrowAmount);
 
         vm.startPrank(liquidator);
-        asset.approve(address(strategy), callAmount);
-        strategy.liquidate(callAmount, liquidator);
+        asset.approve(address(strategy), borrowAmount);
+        (uint256 actualRepaid, ) = strategy.liquidate(borrowAmount, liquidator);
         vm.stopPrank();
 
         assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), callAmount);
         assertEq(strategy.callDeadline(), 0);
+        assertEq(actualRepaid, callAmount);
         assertLt(strategy.totalCollateral(), collateralAmount);
         assertLt(strategy.totalDebt(), borrowAmount);
     }

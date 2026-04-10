@@ -1481,7 +1481,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         // When solvent + call overdue, maxRepay = calledDebt
-        assertLe(
+        assertEq(
             actualRepaid,
             callAmount,
             "liquidation should be capped at called amount when solvent"
@@ -1656,11 +1656,16 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        strategy.liquidate(callAmount, liquidator);
+        (uint256 actualRepaid, ) = strategy.liquidate(callAmount, liquidator);
         vm.stopPrank();
 
         assertEq(strategy.calledDebt(), 0, "called debt should be cleared");
         assertEq(strategy.callDeadline(), 0, "deadline should be cleared");
+        assertEq(
+            actualRepaid,
+            callAmount,
+            "full called amount should be repaid"
+        );
     }
 
     function test_liquidateCollateralSeizedCappedAtTotalCollateral() public {
@@ -1727,9 +1732,7 @@ contract ComprehensiveTest is Setup {
         );
     }
 
-    function test_withdrawDoesNotReduceMaxDebtWhenWithdrawingRepaidInterest()
-        public
-    {
+    function test_withdrawOfRepaidInterestReturnsMaxDebtToDeposit() public {
         uint256 depositAmount = toAssetAmount(100_000);
         uint256 collateralAmt = defaultCollateralAmount();
         uint256 borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -1750,16 +1753,19 @@ contract ComprehensiveTest is Setup {
         strategy.repay(interestAmount);
         vm.stopPrank();
 
-        uint256 maxDebtBefore = strategy.maxDebt();
+        assertEq(
+            strategy.maxDebt(),
+            depositAmount + interestAmount,
+            "interest should grow maxDebt before withdrawal"
+        );
 
         vm.prank(user);
         strategy.withdraw(interestAmount, user, user);
 
-        // Withdrawing repaid interest should not reduce maxDebt
         assertEq(
             strategy.maxDebt(),
-            maxDebtBefore,
-            "maxDebt unchanged when withdrawing interest"
+            depositAmount,
+            "withdrawing repaid interest should restore maxDebt to deposit"
         );
     }
 
@@ -2399,7 +2405,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         // Should be capped at calledDebt since position is still solvent
-        assertLe(
+        assertEq(
             actualRepaid,
             callAmount,
             "repaid should be capped at called amount"

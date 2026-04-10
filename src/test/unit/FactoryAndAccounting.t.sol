@@ -167,9 +167,10 @@ contract FactoryRegistryTest is LocalSetup {
         );
     }
 
-    function test_newPawnBroker_rejectsDuplicateConfig() public {
-        vm.expectRevert("pawn broker exists");
-        pawnBrokerFactory.newPawnBroker(
+    function test_newPawnBroker_allowsDuplicateConfigAndUpdatesLatestLookup()
+        public
+    {
+        address duplicateStrategy = pawnBrokerFactory.newPawnBroker(
             address(asset),
             "Duplicate PawnBroker",
             borrower,
@@ -178,6 +179,37 @@ contract FactoryRegistryTest is LocalSetup {
             LLTV,
             FIXED_RATE,
             CALL_DURATION
+        );
+
+        assertTrue(pawnBrokerFactory.isDeployedPawnBroker(address(strategy)));
+        assertTrue(pawnBrokerFactory.isDeployedPawnBroker(duplicateStrategy));
+        assertNotEq(duplicateStrategy, address(strategy));
+
+        address[] memory duplicateMarkets = pawnBrokerFactory.pawnBrokersFor(
+            address(asset),
+            borrower,
+            address(collateral),
+            address(oracle),
+            LLTV,
+            FIXED_RATE,
+            CALL_DURATION
+        );
+
+        assertEq(duplicateMarkets.length, 2);
+        assertEq(duplicateMarkets[0], address(strategy));
+        assertEq(duplicateMarkets[1], duplicateStrategy);
+
+        assertEq(
+            pawnBrokerFactory.pawnBrokerFor(
+                address(asset),
+                borrower,
+                address(collateral),
+                address(oracle),
+                LLTV,
+                FIXED_RATE,
+                CALL_DURATION
+            ),
+            duplicateStrategy
         );
     }
 }
@@ -227,6 +259,7 @@ contract BorrowerRepairTest is LocalSetup {
         skip(CALL_DURATION + 1);
 
         uint256 debtAmountBefore = strategy.totalDebt();
+        uint256 accruedInterest = debtAmountBefore - borrowAmount;
 
         asset.mint(borrower, partialRepayAmount);
 
@@ -238,7 +271,7 @@ contract BorrowerRepairTest is LocalSetup {
         assertEq(actualRepaid, partialRepayAmount);
         assertEq(strategy.calledDebt(), callAmount - partialRepayAmount);
         assertEq(strategy.repaidCalledDebt(), partialRepayAmount);
-        assertEq(strategy.maxDebt(), liquidity - callAmount);
+        assertEq(strategy.maxDebt(), liquidity - callAmount + accruedInterest);
         assertGt(strategy.callDeadline(), 0);
         assertEq(strategy.totalDebt(), debtAmountBefore - partialRepayAmount);
     }
@@ -379,6 +412,7 @@ contract MaxDebtAccountingTest is LocalSetup {
 
         assertEq(strategy.totalDebt(), 0);
         assertEq(asset.balanceOf(address(strategy)), totalOwed);
+        assertEq(strategy.maxDebt(), totalOwed);
 
         vm.startPrank(management);
         strategy.setPerformanceFee(0);
@@ -463,7 +497,9 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_withdrawOfRepaidInterestDoesNotReduceMaxDebt() public {
+    function test_withdrawOfRepaidInterestReturnsMaxDebtToOriginalDeposit()
+        public
+    {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 borrowAmount = 8_000e18;
@@ -484,9 +520,99 @@ contract MaxDebtAccountingTest is LocalSetup {
         strategy.repay(interestAmount);
         vm.stopPrank();
 
+        assertEq(strategy.maxDebt(), depositAmount + interestAmount);
+
         vm.prank(user);
         strategy.withdraw(interestAmount, user, user);
 
         assertEq(strategy.maxDebt(), depositAmount);
+    }
+
+    function test_fullUtilizationRepaidInterestCanBeReborrowed() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        skip(365 days);
+
+        uint256 interestAmount = strategy.totalDebt() - depositAmount;
+
+        asset.mint(borrower, interestAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), interestAmount);
+        strategy.repay(interestAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.totalDebt(), depositAmount);
+        assertEq(strategy.maxDebt(), depositAmount + interestAmount);
+        assertEq(asset.balanceOf(address(strategy)), interestAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(interestAmount, borrower);
+
+        assertEq(strategy.totalDebt(), depositAmount + interestAmount);
+        assertEq(strategy.maxDebt(), depositAmount + interestAmount);
+        assertEq(asset.balanceOf(address(strategy)), 0);
+    }
+
+    function test_partialCallAccruedInterestLeavesCalledDebtFixedAndGrowsMaxDebt()
+        public
+    {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 callAmount = 4_000e18;
+        uint256 triggerRepayAmount = 1e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        skip(365 days);
+
+        asset.mint(borrower, triggerRepayAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), triggerRepayAmount);
+        strategy.repay(triggerRepayAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.maxDebt(), 6_500e18);
+        assertEq(strategy.calledDebt(), 3_999e18);
+        assertEq(strategy.repaidCalledDebt(), triggerRepayAmount);
+        assertEq(strategy.totalDebt(), 10_499e18);
+    }
+
+    function test_fullCallAccruedInterestRemainsNonBorrowable() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        vm.prank(management);
+        strategy.callDebt(depositAmount);
+
+        skip(365 days);
+
+        uint256 interestAmount = strategy.totalDebt() - depositAmount;
+
+        asset.mint(borrower, interestAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), interestAmount);
+        strategy.repay(interestAmount);
+        vm.stopPrank();
+
+        assertEq(strategy.maxDebt(), 0);
+        assertEq(strategy.calledDebt(), depositAmount);
+        assertEq(strategy.repaidCalledDebt(), interestAmount);
+        assertEq(strategy.totalDebt(), depositAmount);
+        assertGt(strategy.callDeadline(), 0);
+
+        vm.prank(user);
+        strategy.withdraw(interestAmount, user, user);
+
+        assertEq(strategy.maxDebt(), 0);
+        assertEq(strategy.repaidCalledDebt(), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
     }
 }
