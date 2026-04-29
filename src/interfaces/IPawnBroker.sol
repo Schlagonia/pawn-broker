@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.23;
 
-import {IStrategy} from "@tokenized-strategy/interfaces/IStrategy.sol";
+import {IBaseHealthCheck} from "@periphery/Bases/HealthCheck/IBaseHealthCheck.sol";
 import {IMorphoOracle} from "./IMorphoOracle.sol";
 
-interface IPawnBroker is IStrategy {
+interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns the borrower address for this pawn broker.
     function BORROWER() external view returns (address);
 
@@ -50,7 +50,8 @@ interface IPawnBroker is IStrategy {
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     function liquidate(
         uint256 _repayAmount,
-        address _receiver
+        address _receiver,
+        bytes calldata _data
     ) external returns (uint256 actualRepaid, uint256 collateralSeized);
 
     /// @notice Returns current debt including accrued but unapplied interest.
@@ -79,4 +80,8 @@ interface IPawnBroker is IStrategy {
 
     /// @notice Returns the current loan-to-value ratio scaled by `1e18`.
     function currentLtv() external view returns (uint256);
+
+    function lastAccrualTime() external view returns (uint256);
+
+    function rescue(address _token) external;
 }

@@ -49,7 +49,7 @@ contract OracleTest is Setup {
         airdrop(asset, liquidator, liquidateAmount);
         vm.startPrank(liquidator);
         asset.approve(address(strategy), liquidateAmount);
-        strategy.liquidate(liquidateAmount, liquidator);
+        strategy.liquidate(liquidateAmount, liquidator, bytes(""));
         vm.stopPrank();
 
         assertEq(strategy.totalDebt(), debtBeforeLiquidation - liquidateAmount);

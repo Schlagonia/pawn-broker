@@ -6,6 +6,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
+import {ILiquidator} from "./interfaces/ILiquidator.sol";
 
 /// @notice Fixed-rate single-borrower pawn broker secured by posted collateral.
 contract PawnBroker is BaseHooks {
@@ -187,9 +188,9 @@ contract PawnBroker is BaseHooks {
         require(_currentDebt > 0, "no debt");
 
         actualRepaid = Math.min(_amount, _currentDebt);
-        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
-
         _applyRepayment(actualRepaid);
+
+        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
         emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebt);
     }
@@ -204,13 +205,16 @@ contract PawnBroker is BaseHooks {
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
-        require(_amount <= totalCollateral, "insufficient collateral");
+
+        uint256 _totalCollateral = totalCollateral;
+        require(_amount <= _totalCollateral, "insufficient collateral");
 
         uint256 _currentDebt = _accrueInterest();
 
-        totalCollateral -= _amount;
+        _totalCollateral -= _amount;
+        totalCollateral = _totalCollateral;
         require(
-            _isSolventAt(_currentDebt, totalCollateral) && !_isCallOverdue(),
+            _isSolventAt(_currentDebt, _totalCollateral) && !_isCallOverdue(),
             "position unhealthy"
         );
         ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
@@ -219,7 +223,7 @@ contract PawnBroker is BaseHooks {
             msg.sender,
             _receiver,
             _amount,
-            totalCollateral
+            _totalCollateral
         );
     }
 
@@ -249,11 +253,13 @@ contract PawnBroker is BaseHooks {
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     /// @param _repayAmount The requested repayment amount.
     /// @param _receiver The address that receives seized collateral.
+    /// @param _data Additional data to pass to the liquidator.
     /// @return actualRepaid The amount of debt actually repaid.
     /// @return collateralSeized The amount of collateral transferred to the receiver.
     function liquidate(
         uint256 _repayAmount,
-        address _receiver
+        address _receiver,
+        bytes calldata _data
     ) external returns (uint256 actualRepaid, uint256 collateralSeized) {
         require(_repayAmount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
@@ -282,15 +288,28 @@ contract PawnBroker is BaseHooks {
 
         collateralSeized = _loanToCollateral(actualRepaid);
         require(collateralSeized > 0, "seize too small");
-        if (collateralSeized > _currentCollateral)
+        if (collateralSeized > _currentCollateral) {
             collateralSeized = _currentCollateral;
-
-        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
+        }
 
         totalCollateral -= collateralSeized;
         _applyRepayment(actualRepaid);
 
         ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, collateralSeized);
+
+        // If the caller has specified data.
+        if (_data.length != 0) {
+            // Do the callback.
+            ILiquidator(_receiver).liquidateCallback(
+                COLLATERAL_ASSET,
+                msg.sender,
+                collateralSeized,
+                actualRepaid,
+                _data
+            );
+        }
+
+        asset.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
         emit Liquidated(
             msg.sender,
@@ -374,7 +393,10 @@ contract PawnBroker is BaseHooks {
             repaidCalledDebt -= _repaidCalledConsumed;
         }
 
-        uint256 _borrowableConsumed = _assets - _repaidCalledConsumed;
+        uint256 _borrowableConsumed = Math.min(
+            maxDebt,
+            _assets - _repaidCalledConsumed
+        );
         if (_borrowableConsumed > 0) {
             maxDebt -= _borrowableConsumed;
         }
@@ -490,14 +512,13 @@ contract PawnBroker is BaseHooks {
     }
 
     /// @notice Rescues unrelated tokens accidentally sent to the strategy.
-    function rescue(address _token, address _receiver) external onlyManagement {
-        require(_receiver != address(0), "zero receiver");
+    function rescue(address _token) external onlyManagement {
         require(_token != address(asset), "cannot rescue asset");
         require(_token != COLLATERAL_ASSET, "cannot rescue collateral");
         require(_token != address(this), "cannot rescue self");
 
         ERC20(_token).safeTransfer(
-            _receiver,
+            msg.sender,
             ERC20(_token).balanceOf(address(this))
         );
     }

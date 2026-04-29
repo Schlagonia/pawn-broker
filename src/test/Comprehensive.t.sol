@@ -5,16 +5,53 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Setup, ERC20} from "./utils/Setup.sol";
 import {PawnBroker} from "../PawnBroker.sol";
 import {IPawnBroker} from "../interfaces/IPawnBroker.sol";
+import {ILiquidator} from "../interfaces/ILiquidator.sol";
 
-// Extended interface to access public state not in IPawnBroker
-interface IStrategyExtended is IPawnBroker {
-    function lastAccrualTime() external view returns (uint256);
-    function rescue(address _token, address _receiver) external;
-    function setDoHealthCheck(bool _doHealthCheck) external;
+contract MockLiquidator is ILiquidator {
+    IPawnBroker public immutable strategy;
+    ERC20 public immutable asset;
+
+    bool public callbackHit;
+    address public callbackToken;
+    address public callbackSender;
+    uint256 public callbackAmount;
+    uint256 public callbackAmountNeeded;
+    bytes32 public callbackDataHash;
+
+    constructor(IPawnBroker _strategy) {
+        strategy = _strategy;
+        asset = ERC20(_strategy.asset());
+    }
+
+    function executeLiquidation(
+        uint256 _repayAmount,
+        bytes calldata _data
+    ) external returns (uint256 actualRepaid, uint256 collateralSeized) {
+        return strategy.liquidate(_repayAmount, address(this), _data);
+    }
+
+    function liquidateCallback(
+        address _token,
+        address _sender,
+        uint256 _amount,
+        uint256 _amountNeeded,
+        bytes calldata _data
+    ) external {
+        require(msg.sender == address(strategy), "not strategy");
+
+        callbackHit = true;
+        callbackToken = _token;
+        callbackSender = _sender;
+        callbackAmount = _amount;
+        callbackAmountNeeded = _amountNeeded;
+        callbackDataHash = keccak256(_data);
+
+        asset.approve(address(strategy), _amountNeeded);
+    }
 }
 
 contract ComprehensiveTest is Setup {
-    IStrategyExtended internal strat;
+    IPawnBroker internal strat;
 
     // Events mirrored from PawnBroker.sol for expectEmit checks
     event CollateralPosted(
@@ -60,7 +97,7 @@ contract ComprehensiveTest is Setup {
 
     function setUp() public override {
         super.setUp();
-        strat = IStrategyExtended(address(strategy));
+        strat = IPawnBroker(address(strategy));
     }
 
     // ---------------------------------------------------------------
@@ -182,7 +219,7 @@ contract ComprehensiveTest is Setup {
         vm.startPrank(stranger);
         asset.approve(address(strategy), liquidateAmt);
         vm.expectRevert("not liquidator");
-        strategy.liquidate(liquidateAmt, stranger);
+        strategy.liquidate(liquidateAmt, stranger, bytes(""));
         vm.stopPrank();
     }
 
@@ -200,7 +237,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), liquidateAmt);
-        (uint256 repaid, ) = strategy.liquidate(liquidateAmt, management);
+        (uint256 repaid, ) = strategy.liquidate(
+            liquidateAmt,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertGt(repaid, 0, "management should be able to liquidate");
@@ -212,7 +253,7 @@ contract ComprehensiveTest is Setup {
 
         vm.prank(stranger);
         vm.expectRevert("!management");
-        strat.rescue(address(unrelated), stranger);
+        strat.rescue(address(unrelated));
     }
 
     function test_strangerCannotCallAnyRestrictedFunction() public {
@@ -242,7 +283,7 @@ contract ComprehensiveTest is Setup {
         strategy.setLiquidator(stranger, true);
 
         vm.expectRevert("!management");
-        strat.rescue(tokenAddrs["DAI"], stranger);
+        strat.rescue(tokenAddrs["DAI"]);
 
         vm.stopPrank();
     }
@@ -317,7 +358,7 @@ contract ComprehensiveTest is Setup {
 
         vm.prank(management);
         vm.expectRevert("zero amount");
-        strategy.liquidate(0, management);
+        strategy.liquidate(0, management, bytes(""));
     }
 
     function test_liquidateRevertsOnZeroReceiver() public {
@@ -331,7 +372,7 @@ contract ComprehensiveTest is Setup {
         vm.startPrank(management);
         asset.approve(address(strategy), borrowAmt);
         vm.expectRevert("zero receiver");
-        strategy.liquidate(borrowAmt, address(0));
+        strategy.liquidate(borrowAmt, address(0), bytes(""));
         vm.stopPrank();
     }
 
@@ -344,19 +385,13 @@ contract ComprehensiveTest is Setup {
     function test_rescueRevertsForAsset() public {
         vm.prank(management);
         vm.expectRevert("cannot rescue asset");
-        strat.rescue(address(asset), management);
+        strat.rescue(address(asset));
     }
 
     function test_rescueRevertsForCollateral() public {
         vm.prank(management);
         vm.expectRevert("cannot rescue collateral");
-        strat.rescue(address(collateral), management);
-    }
-
-    function test_rescueRevertsForZeroReceiver() public {
-        vm.prank(management);
-        vm.expectRevert("zero receiver");
-        strat.rescue(tokenAddrs["DAI"], address(0));
+        strat.rescue(address(collateral));
     }
 
     // ================================================================
@@ -1391,7 +1426,8 @@ contract ComprehensiveTest is Setup {
         asset.approve(address(strategy), repayAmt);
         (uint256 actualRepaid, uint256 seized) = strategy.liquidate(
             repayAmt,
-            management
+            management,
+            bytes("")
         );
         vm.stopPrank();
 
@@ -1419,7 +1455,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(callAmount, liquidator);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            callAmount,
+            liquidator,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertGt(actualRepaid, 0, "should allow liquidation when call overdue");
@@ -1433,7 +1473,7 @@ contract ComprehensiveTest is Setup {
         vm.startPrank(management);
         asset.approve(address(strategy), liqAmt);
         vm.expectRevert("not liquidatable");
-        strategy.liquidate(liqAmt, management);
+        strategy.liquidate(liqAmt, management, bytes(""));
         vm.stopPrank();
     }
 
@@ -1453,7 +1493,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (, uint256 seized) = strategy.liquidate(callAmount, liquidator);
+        (, uint256 seized) = strategy.liquidate(
+            callAmount,
+            liquidator,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertEq(
@@ -1477,7 +1521,11 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, borrowAmt);
         vm.startPrank(management);
         asset.approve(address(strategy), borrowAmt);
-        (uint256 actualRepaid, ) = strategy.liquidate(borrowAmt, management);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            borrowAmt,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         // When solvent + call overdue, maxRepay = calledDebt
@@ -1503,7 +1551,8 @@ contract ComprehensiveTest is Setup {
         asset.approve(address(strategy), totalOwed * 2);
         (uint256 actualRepaid, ) = strategy.liquidate(
             totalOwed * 2,
-            management
+            management,
+            bytes("")
         );
         vm.stopPrank();
 
@@ -1539,7 +1588,11 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, totalOwed);
         vm.startPrank(management);
         asset.approve(address(strategy), totalOwed);
-        (uint256 actualRepaid, ) = strategy.liquidate(totalOwed, management);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            totalOwed,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertLe(
@@ -1563,13 +1616,73 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, callAmount);
         vm.startPrank(management);
         asset.approve(address(strategy), callAmount);
-        (, uint256 seized) = strategy.liquidate(callAmount, receiver);
+        (, uint256 seized) = strategy.liquidate(
+            callAmount,
+            receiver,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertEq(
             collateral.balanceOf(receiver),
             receiverBefore + seized,
             "receiver should get seized collateral"
+        );
+    }
+
+    function test_liquidateWithDataCallsReceiverCallback() public {
+        (, , uint256 borrowAmt) = _setupPosition();
+
+        uint256 callAmount = borrowAmt / 5;
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+        skip(callDuration + 1);
+
+        MockLiquidator callbackReceiver = new MockLiquidator(strategy);
+        bytes memory callbackData = abi.encode("liquidation callback");
+
+        setLiquidator(address(callbackReceiver), true);
+        airdrop(asset, address(callbackReceiver), callAmount);
+
+        uint256 strategyAssetBefore = asset.balanceOf(address(strategy));
+        uint256 receiverCollateralBefore = collateral.balanceOf(
+            address(callbackReceiver)
+        );
+
+        (uint256 actualRepaid, uint256 seized) = callbackReceiver
+            .executeLiquidation(callAmount, callbackData);
+
+        assertTrue(callbackReceiver.callbackHit(), "callback should fire");
+        assertEq(
+            callbackReceiver.callbackToken(),
+            address(collateral),
+            "callback token"
+        );
+        assertEq(
+            callbackReceiver.callbackSender(),
+            address(callbackReceiver),
+            "callback sender"
+        );
+        assertEq(callbackReceiver.callbackAmount(), seized, "callback amount");
+        assertEq(
+            callbackReceiver.callbackAmountNeeded(),
+            actualRepaid,
+            "callback amount needed"
+        );
+        assertEq(
+            callbackReceiver.callbackDataHash(),
+            keccak256(callbackData),
+            "callback data"
+        );
+        assertEq(
+            collateral.balanceOf(address(callbackReceiver)),
+            receiverCollateralBefore + seized,
+            "receiver collateral"
+        );
+        assertEq(
+            asset.balanceOf(address(strategy)),
+            strategyAssetBefore + actualRepaid,
+            "strategy repayment"
         );
     }
 
@@ -1586,7 +1699,11 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, callAmount);
         vm.startPrank(management);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(callAmount, management);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            callAmount,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertEq(
@@ -1607,7 +1724,7 @@ contract ComprehensiveTest is Setup {
         vm.startPrank(stranger);
         asset.approve(address(strategy), borrowAmt);
         vm.expectRevert("not liquidator");
-        strategy.liquidate(borrowAmt, stranger);
+        strategy.liquidate(borrowAmt, stranger, bytes(""));
         vm.stopPrank();
     }
 
@@ -1626,7 +1743,8 @@ contract ComprehensiveTest is Setup {
         asset.approve(address(strategy), partialAmount);
         (uint256 actualRepaid, ) = strategy.liquidate(
             partialAmount,
-            management
+            management,
+            bytes("")
         );
         vm.stopPrank();
 
@@ -1656,7 +1774,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(callAmount, liquidator);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            callAmount,
+            liquidator,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertEq(strategy.calledDebt(), 0, "called debt should be cleared");
@@ -1691,7 +1813,11 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, colValue);
         vm.startPrank(management);
         asset.approve(address(strategy), colValue);
-        (, uint256 seized) = strategy.liquidate(colValue, management);
+        (, uint256 seized) = strategy.liquidate(
+            colValue,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertLe(
@@ -1974,7 +2100,7 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, totalOwed);
         vm.startPrank(management);
         asset.approve(address(strategy), totalOwed);
-        strategy.liquidate(totalOwed, management);
+        strategy.liquidate(totalOwed, management, bytes(""));
         vm.stopPrank();
 
         // If no collateral left, _harvestAndReport returns just idle
@@ -2096,7 +2222,7 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, liqAmt);
         vm.startPrank(management);
         asset.approve(address(strategy), liqAmt);
-        (uint256 repaid, ) = strategy.liquidate(liqAmt, management);
+        (uint256 repaid, ) = strategy.liquidate(liqAmt, management, bytes(""));
         vm.stopPrank();
 
         assertGt(repaid, 0, "liquidation should work after shutdown");
@@ -2122,7 +2248,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), borrowAmt);
-        (uint256 repaid, ) = strategy.liquidate(borrowAmt, liquidator);
+        (uint256 repaid, ) = strategy.liquidate(
+            borrowAmt,
+            liquidator,
+            bytes("")
+        );
         vm.stopPrank();
 
         assertGt(repaid, 0, "full flow should work");
@@ -2203,7 +2333,7 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), totalOwed);
-        strategy.liquidate(totalOwed, management);
+        strategy.liquidate(totalOwed, management, bytes(""));
         vm.stopPrank();
 
         if (strategy.totalDebt() > 0 && strategy.totalCollateral() == 0) {
@@ -2245,14 +2375,13 @@ contract ComprehensiveTest is Setup {
         uint256 amount = 1_000e18;
         airdrop(unrelated, address(strategy), amount);
 
-        address receiver = address(0xBEEF);
-        uint256 receiverBefore = unrelated.balanceOf(receiver);
+        uint256 receiverBefore = unrelated.balanceOf(management);
 
         vm.prank(management);
-        strat.rescue(address(unrelated), receiver);
+        strat.rescue(address(unrelated));
 
         assertEq(
-            unrelated.balanceOf(receiver),
+            unrelated.balanceOf(management),
             receiverBefore + amount,
             "receiver should get rescued tokens"
         );
@@ -2401,7 +2530,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), hugeAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(hugeAmount, management);
+        (uint256 actualRepaid, ) = strategy.liquidate(
+            hugeAmount,
+            management,
+            bytes("")
+        );
         vm.stopPrank();
 
         // Should be capped at calledDebt since position is still solvent
@@ -2791,7 +2924,7 @@ contract ComprehensiveTest is Setup {
             expectedCollateralAfter
         );
 
-        strategy.liquidate(callAmount, liquidator);
+        strategy.liquidate(callAmount, liquidator, bytes(""));
         vm.stopPrank();
     }
 
