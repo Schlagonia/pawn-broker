@@ -7,13 +7,7 @@ contract FunctionSignatureTest is Setup {
     function test_functionCollisions() public {
         uint256 wad = 10 ** asset.decimals();
         vm.expectRevert("initialized");
-        strategy.initialize(
-            address(asset),
-            "name",
-            management,
-            performanceFeeRecipient,
-            keeper
-        );
+        strategy.initialize(address(asset), "name", management, performanceFeeRecipient, keeper);
 
         assertEq(strategy.convertToAssets(wad), wad, "convert to assets");
         assertEq(strategy.convertToShares(wad), wad, "convert to shares");
@@ -32,11 +26,7 @@ contract FunctionSignatureTest is Setup {
         assertGt(strategy.lastReport(), 0, "last report");
         assertEq(strategy.pricePerShare(), 10 ** asset.decimals(), "pps");
         assertTrue(!strategy.isShutdown());
-        assertEq(
-            strategy.symbol(),
-            string(abi.encodePacked("ys", asset.symbol())),
-            "symbol"
-        );
+        assertEq(strategy.symbol(), string(abi.encodePacked("ys", asset.symbol())), "symbol");
         assertEq(strategy.decimals(), asset.decimals(), "decimals");
 
         assertEq(strategy.totalCollateral(), 0);

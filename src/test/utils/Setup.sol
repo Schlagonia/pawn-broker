@@ -58,16 +58,9 @@ contract Setup is Test, IEvents {
         collateral = ERC20(tokenAddrs["SIUSD"]);
         decimals = asset.decimals();
 
-        collateralOracle = IMorphoOracle(
-            0xd2cC46b9B2D761502eF933320ecf0268EC0dfa6d
-        );
+        collateralOracle = IMorphoOracle(0xd2cC46b9B2D761502eF933320ecf0268EC0dfa6d);
 
-        pawnBrokerFactory = new PawnBrokerFactory(
-            management,
-            performanceFeeRecipient,
-            keeper,
-            emergencyAdmin
-        );
+        pawnBrokerFactory = new PawnBrokerFactory(management, performanceFeeRecipient, keeper, emergencyAdmin);
 
         strategy = IPawnBroker(setUpPawnBroker());
         factory = strategy.FACTORY();
@@ -121,28 +114,16 @@ contract Setup is Test, IEvents {
         return wholeAmount * 10 ** asset.decimals();
     }
 
-    function toCollateralAmount(
-        uint256 wholeAmount
-    ) public view returns (uint256) {
+    function toCollateralAmount(uint256 wholeAmount) public view returns (uint256) {
         return wholeAmount * 10 ** collateral.decimals();
     }
 
-    function collateralValue(
-        uint256 collateralAmount
-    ) public view returns (uint256) {
+    function collateralValue(uint256 collateralAmount) public view returns (uint256) {
         return Math.mulDiv(collateralAmount, collateralOracle.price(), 1e36);
     }
 
-    function borrowAmountForLtv(
-        uint256 collateralAmount,
-        uint256 targetLtvRatio
-    ) public view returns (uint256) {
-        return
-            Math.mulDiv(
-                collateralValue(collateralAmount),
-                targetLtvRatio,
-                1e18
-            );
+    function borrowAmountForLtv(uint256 collateralAmount, uint256 targetLtvRatio) public view returns (uint256) {
+        return Math.mulDiv(collateralValue(collateralAmount), targetLtvRatio, 1e18);
     }
 
     function defaultLiquidityAmount() public view returns (uint256) {
@@ -153,17 +134,11 @@ contract Setup is Test, IEvents {
         return toCollateralAmount(100_000);
     }
 
-    function defaultBorrowAmount(
-        uint256 collateralAmount
-    ) public view returns (uint256) {
+    function defaultBorrowAmount(uint256 collateralAmount) public view returns (uint256) {
         return borrowAmountForLtv(collateralAmount, targetLtv);
     }
 
-    function depositIntoStrategy(
-        IPawnBroker _strategy,
-        address _user,
-        uint256 _amount
-    ) public {
+    function depositIntoStrategy(IPawnBroker _strategy, address _user, uint256 _amount) public {
         vm.prank(management);
         _strategy.setAllowed(_user, true);
 
@@ -174,11 +149,7 @@ contract Setup is Test, IEvents {
         _strategy.deposit(_amount, _user);
     }
 
-    function mintAndDepositIntoStrategy(
-        IPawnBroker _strategy,
-        address _user,
-        uint256 _amount
-    ) public {
+    function mintAndDepositIntoStrategy(IPawnBroker _strategy, address _user, uint256 _amount) public {
         airdrop(asset, _user, _amount);
         depositIntoStrategy(_strategy, _user, _amount);
     }
@@ -192,16 +163,11 @@ contract Setup is Test, IEvents {
         vm.stopPrank();
     }
 
-    function checkStrategyTotals(
-        IPawnBroker _strategy,
-        uint256 _totalAssets,
-        uint256 _totalDebt,
-        uint256 _totalIdle
-    ) public {
+    function checkStrategyTotals(IPawnBroker _strategy, uint256 _totalAssets, uint256 _totalDebt, uint256 _totalIdle)
+        public
+    {
         uint256 _assets = _strategy.totalAssets();
-        uint256 _balance = ERC20(_strategy.asset()).balanceOf(
-            address(_strategy)
-        );
+        uint256 _balance = ERC20(_strategy.asset()).balanceOf(address(_strategy));
         uint256 _idle = _balance > _assets ? _assets : _balance;
         uint256 _debt = _assets - _idle;
         assertEq(_assets, _totalAssets, "!totalAssets");

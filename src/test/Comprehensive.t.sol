@@ -23,10 +23,10 @@ contract MockLiquidator is ILiquidator {
         asset = ERC20(_strategy.asset());
     }
 
-    function executeLiquidation(
-        uint256 _repayAmount,
-        bytes calldata _data
-    ) external returns (uint256 actualRepaid, uint256 collateralSeized) {
+    function executeLiquidation(uint256 _repayAmount, bytes calldata _data)
+        external
+        returns (uint256 actualRepaid, uint256 collateralSeized)
+    {
         return strategy.liquidate(_repayAmount, address(this), _data);
     }
 
@@ -54,35 +54,13 @@ contract ComprehensiveTest is Setup {
     IPawnBroker internal strat;
 
     // Events mirrored from PawnBroker.sol for expectEmit checks
-    event CollateralPosted(
-        address indexed caller,
-        uint256 amount,
-        uint256 totalCollateral
-    );
+    event CollateralPosted(address indexed caller, uint256 amount, uint256 totalCollateral);
     event CollateralWithdrawn(
-        address indexed caller,
-        address indexed receiver,
-        uint256 amount,
-        uint256 totalCollateral
+        address indexed caller, address indexed receiver, uint256 amount, uint256 totalCollateral
     );
-    event Borrowed(
-        address indexed caller,
-        address indexed receiver,
-        uint256 amount,
-        uint256 debtAmount
-    );
-    event Repaid(
-        address indexed caller,
-        uint256 amount,
-        uint256 debtAmount,
-        uint256 calledDebt
-    );
-    event DebtCalled(
-        address indexed caller,
-        uint256 amount,
-        uint256 totalCalledDebt,
-        uint256 deadline
-    );
+    event Borrowed(address indexed caller, address indexed receiver, uint256 amount, uint256 debtAmount);
+    event Repaid(address indexed caller, uint256 amount, uint256 debtAmount, uint256 calledDebt);
+    event DebtCalled(address indexed caller, uint256 amount, uint256 totalCalledDebt, uint256 deadline);
     event CallCleared(address indexed caller);
     event Liquidated(
         address indexed caller,
@@ -104,10 +82,7 @@ contract ComprehensiveTest is Setup {
     // Helper: sets up a standard position with liquidity, collateral,
     // and an active borrow. Returns the borrow amount.
     // ---------------------------------------------------------------
-    function _setupPosition()
-        internal
-        returns (uint256 liquidity, uint256 collateralAmt, uint256 borrowAmt)
-    {
+    function _setupPosition() internal returns (uint256 liquidity, uint256 collateralAmt, uint256 borrowAmt) {
         liquidity = defaultLiquidityAmount();
         collateralAmt = defaultCollateralAmount();
         borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -118,10 +93,7 @@ contract ComprehensiveTest is Setup {
     }
 
     // Helper: makes a position insolvent by borrowing at LLTV and accruing interest
-    function _makeInsolvent()
-        internal
-        returns (uint256 liquidity, uint256 collateralAmt, uint256 borrowAmt)
-    {
+    function _makeInsolvent() internal returns (uint256 liquidity, uint256 collateralAmt, uint256 borrowAmt) {
         liquidity = defaultLiquidityAmount();
         collateralAmt = defaultCollateralAmount();
         borrowAmt = borrowAmountForLtv(collateralAmt, lltv);
@@ -207,7 +179,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_onlyManagementOrLiquidatorCanLiquidate() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -223,10 +195,8 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
     }
 
-    function test_managementCanLiquidateWithoutBeingInLiquidatorsMapping()
-        public
-    {
-        (, , uint256 borrowAmt) = _setupPosition();
+    function test_managementCanLiquidateWithoutBeingInLiquidatorsMapping() public {
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 5);
@@ -237,11 +207,7 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), liquidateAmt);
-        (uint256 repaid, ) = strategy.liquidate(
-            liquidateAmt,
-            management,
-            bytes("")
-        );
+        (uint256 repaid,) = strategy.liquidate(liquidateAmt, management, bytes(""));
         vm.stopPrank();
 
         assertGt(repaid, 0, "management should be able to liquidate");
@@ -350,7 +316,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_liquidateRevertsOnZeroAmount() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -362,7 +328,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_liquidateRevertsOnZeroReceiver() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -401,109 +367,49 @@ contract ComprehensiveTest is Setup {
     function test_constructorRejectsZeroBorrower() public {
         vm.expectRevert("zero borrower");
         new PawnBroker(
-            address(asset),
-            "Test",
-            address(0),
-            address(collateral),
-            address(collateralOracle),
-            lltv,
-            rate,
-            callDuration
+            address(asset), "Test", address(0), address(collateral), address(collateralOracle), lltv, rate, callDuration
         );
     }
 
     function test_constructorRejectsZeroCollateral() public {
         vm.expectRevert("zero collateral");
         new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(0),
-            address(collateralOracle),
-            lltv,
-            rate,
-            callDuration
+            address(asset), "Test", borrower, address(0), address(collateralOracle), lltv, rate, callDuration
         );
     }
 
     function test_constructorRejectsZeroOracle() public {
         vm.expectRevert("zero oracle");
-        new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(collateral),
-            address(0),
-            lltv,
-            rate,
-            callDuration
-        );
+        new PawnBroker(address(asset), "Test", borrower, address(collateral), address(0), lltv, rate, callDuration);
     }
 
     function test_constructorRejectsSameAssetAndCollateral() public {
         vm.expectRevert("shared asset");
         new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(asset),
-            address(collateralOracle),
-            lltv,
-            rate,
-            callDuration
+            address(asset), "Test", borrower, address(asset), address(collateralOracle), lltv, rate, callDuration
         );
     }
 
     function test_constructorRejectsInvalidLltv() public {
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(collateral),
-            address(collateralOracle),
-            0,
-            rate,
-            callDuration
+            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 0, rate, callDuration
         );
 
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(collateral),
-            address(collateralOracle),
-            1e18,
-            rate,
-            callDuration
+            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 1e18, rate, callDuration
         );
 
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(collateral),
-            address(collateralOracle),
-            2e18,
-            rate,
-            callDuration
+            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 2e18, rate, callDuration
         );
     }
 
     function test_constructorRejectsZeroCallDuration() public {
         vm.expectRevert("zero call duration");
-        new PawnBroker(
-            address(asset),
-            "Test",
-            borrower,
-            address(collateral),
-            address(collateralOracle),
-            lltv,
-            rate,
-            0
-        );
+        new PawnBroker(address(asset), "Test", borrower, address(collateral), address(collateralOracle), lltv, rate, 0);
     }
 
     // ================================================================
@@ -513,11 +419,7 @@ contract ComprehensiveTest is Setup {
     function test_postCollateralIncreasesTotalCollateral() public {
         uint256 amount = toCollateralAmount(1_000);
         postCollateral(amount);
-        assertEq(
-            strategy.totalCollateral(),
-            amount,
-            "totalCollateral should match"
-        );
+        assertEq(strategy.totalCollateral(), amount, "totalCollateral should match");
     }
 
     function test_postCollateralTransfersTokens() public {
@@ -533,21 +435,9 @@ contract ComprehensiveTest is Setup {
         strategy.postCollateral(amount);
         vm.stopPrank();
 
-        assertEq(
-            collateral.balanceOf(borrower),
-            borrowerBefore - amount,
-            "borrower balance should decrease"
-        );
-        assertEq(
-            collateral.balanceOf(address(strategy)),
-            strategyBefore + amount,
-            "strategy balance should increase"
-        );
-        assertEq(
-            strategy.totalCollateral(),
-            amount,
-            "totalCollateral mismatch"
-        );
+        assertEq(collateral.balanceOf(borrower), borrowerBefore - amount, "borrower balance should decrease");
+        assertEq(collateral.balanceOf(address(strategy)), strategyBefore + amount, "strategy balance should increase");
+        assertEq(strategy.totalCollateral(), amount, "totalCollateral mismatch");
     }
 
     function test_postCollateralMultipleTimesAccumulates() public {
@@ -559,18 +449,10 @@ contract ComprehensiveTest is Setup {
         assertEq(strategy.totalCollateral(), amount1, "after first post");
 
         postCollateral(amount2);
-        assertEq(
-            strategy.totalCollateral(),
-            amount1 + amount2,
-            "after second post"
-        );
+        assertEq(strategy.totalCollateral(), amount1 + amount2, "after second post");
 
         postCollateral(amount3);
-        assertEq(
-            strategy.totalCollateral(),
-            amount1 + amount2 + amount3,
-            "after third post"
-        );
+        assertEq(strategy.totalCollateral(), amount1 + amount2 + amount3, "after third post");
     }
 
     function test_postCollateralAccruesInterest() public {
@@ -587,11 +469,7 @@ contract ComprehensiveTest is Setup {
         strategy.postCollateral(amount);
         vm.stopPrank();
 
-        assertGt(
-            strat.lastAccrualTime(),
-            timeBefore,
-            "lastAccrualTime should update"
-        );
+        assertGt(strat.lastAccrualTime(), timeBefore, "lastAccrualTime should update");
     }
 
     function test_withdrawCollateralDecreasesTotalCollateral() public {
@@ -602,11 +480,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.withdrawCollateral(withdrawAmt, borrower);
 
-        assertEq(
-            strategy.totalCollateral(),
-            amount - withdrawAmt,
-            "totalCollateral should decrease"
-        );
+        assertEq(strategy.totalCollateral(), amount - withdrawAmt, "totalCollateral should decrease");
     }
 
     function test_withdrawCollateralTransfersTokens() public {
@@ -619,16 +493,12 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.withdrawCollateral(amount, receiver);
 
-        assertEq(
-            collateral.balanceOf(receiver),
-            receiverBefore + amount,
-            "receiver should get collateral"
-        );
+        assertEq(collateral.balanceOf(receiver), receiverBefore + amount, "receiver should get collateral");
         assertEq(strategy.totalCollateral(), 0, "totalCollateral should be 0");
     }
 
     function test_withdrawCollateralRevertsIfWouldBecomeInsolvent() public {
-        (, uint256 collateralAmt, ) = _setupPosition();
+        (, uint256 collateralAmt,) = _setupPosition();
 
         vm.prank(borrower);
         vm.expectRevert("position unhealthy");
@@ -636,7 +506,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_withdrawCollateralRevertsIfDebtCalled() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 2);
@@ -673,11 +543,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(borrowAmt, receiver);
 
-        assertEq(
-            asset.balanceOf(receiver),
-            receiverBefore + borrowAmt,
-            "receiver should get borrowed assets"
-        );
+        assertEq(asset.balanceOf(receiver), receiverBefore + borrowAmt, "receiver should get borrowed assets");
     }
 
     function test_borrowUpdatesDebtAmount() public {
@@ -693,11 +559,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(borrowAmt, borrower);
 
-        assertEq(
-            strategy.totalDebt(),
-            borrowAmt,
-            "total debt should equal borrow amount"
-        );
+        assertEq(strategy.totalDebt(), borrowAmt, "total debt should equal borrow amount");
     }
 
     function test_borrowToDifferentReceiver() public {
@@ -715,9 +577,7 @@ contract ComprehensiveTest is Setup {
         strategy.borrow(borrowAmt, customReceiver);
 
         assertEq(
-            asset.balanceOf(customReceiver),
-            receiverBefore + borrowAmt,
-            "custom receiver should get borrowed assets"
+            asset.balanceOf(customReceiver), receiverBefore + borrowAmt, "custom receiver should get borrowed assets"
         );
     }
 
@@ -778,7 +638,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_borrowRevertsIfDebtCalled() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
         uint256 oneUsdc = toAssetAmount(1);
 
         vm.prank(management);
@@ -819,11 +679,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(secondBorrow, borrower);
 
-        assertEq(
-            strategy.totalDebt(),
-            firstBorrow + secondBorrow,
-            "total debt after second borrow"
-        );
+        assertEq(strategy.totalDebt(), firstBorrow + secondBorrow, "total debt after second borrow");
     }
 
     // ================================================================
@@ -858,7 +714,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_partialRepayReducesDebtCorrectly() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 partialAmount = borrowAmt / 3;
         airdrop(asset, borrower, partialAmount);
@@ -869,11 +725,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(actualRepaid, partialAmount, "actual repaid should match");
-        assertEq(
-            strategy.totalDebt(),
-            borrowAmt - partialAmount,
-            "debt should be reduced by partial amount"
-        );
+        assertEq(strategy.totalDebt(), borrowAmt - partialAmount, "debt should be reduced by partial amount");
     }
 
     function test_repayCappedAtTotalDebt() public {
@@ -892,16 +744,12 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(actualRepaid, totalOwed, "should only repay total debt");
-        assertEq(
-            asset.balanceOf(borrower),
-            borrowerBefore - totalOwed,
-            "borrower should keep excess"
-        );
+        assertEq(asset.balanceOf(borrower), borrowerBefore - totalOwed, "borrower should keep excess");
         assertEq(strategy.totalDebt(), 0, "debt should be zero");
     }
 
     function test_repayingOneYearInterestRestoresDebtToBorrowAmount() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
@@ -914,14 +762,12 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         assertEq(
-            strategy.totalDebt(),
-            borrowAmt,
-            "repaying one year of interest should restore the debt to borrow amount"
+            strategy.totalDebt(), borrowAmt, "repaying one year of interest should restore the debt to borrow amount"
         );
     }
 
     function test_repayWithCalledDebtReducesCalledDebtFirst() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -936,20 +782,12 @@ contract ComprehensiveTest is Setup {
         strategy.repay(repayAmt);
         vm.stopPrank();
 
-        assertEq(
-            strategy.calledDebt(),
-            callAmount - repayAmt,
-            "called debt should be reduced"
-        );
-        assertEq(
-            strategy.repaidCalledDebt(),
-            repayAmt,
-            "repaidCalledDebt should track the reduction"
-        );
+        assertEq(strategy.calledDebt(), callAmount - repayAmt, "called debt should be reduced");
+        assertEq(strategy.repaidCalledDebt(), repayAmt, "repaidCalledDebt should track the reduction");
     }
 
     function test_fullRepayOfCalledDebtClearsDeadline() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -973,75 +811,47 @@ contract ComprehensiveTest is Setup {
     // ================================================================
 
     function test_interestAccrues1Day() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 debtBefore = strategy.totalDebt();
         skip(1 days);
         uint256 debtAfter = strategy.totalDebt();
 
-        uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, rate, MAX_BPS),
-            1 days,
-            365 days
-        );
+        uint256 expectedInterest = Math.mulDiv(Math.mulDiv(borrowAmt, rate, MAX_BPS), 1 days, 365 days);
 
         assertGt(debtAfter, debtBefore, "debt should increase after 1 day");
-        assertApproxEqAbs(
-            debtAfter - debtBefore,
-            expectedInterest,
-            1,
-            "1-day interest should match expected"
-        );
+        assertApproxEqAbs(debtAfter - debtBefore, expectedInterest, 1, "1-day interest should match expected");
     }
 
     function test_interestAccrues30Days() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(30 days);
 
-        uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, rate, MAX_BPS),
-            30 days,
-            365 days
-        );
+        uint256 expectedInterest = Math.mulDiv(Math.mulDiv(borrowAmt, rate, MAX_BPS), 30 days, 365 days);
 
         uint256 totalOwed = strategy.totalDebt();
-        assertApproxEqAbs(
-            totalOwed,
-            borrowAmt + expectedInterest,
-            1,
-            "30-day interest should match expected"
-        );
+        assertApproxEqAbs(totalOwed, borrowAmt + expectedInterest, 1, "30-day interest should match expected");
     }
 
     function test_interestAccrues365Days() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
         uint256 expectedInterest = (borrowAmt * rate) / MAX_BPS;
         uint256 totalOwed = strategy.totalDebt();
 
-        assertApproxEqAbs(
-            totalOwed,
-            borrowAmt + expectedInterest,
-            1,
-            "1-year interest should match expected"
-        );
+        assertApproxEqAbs(totalOwed, borrowAmt + expectedInterest, 1, "1-year interest should match expected");
     }
 
     function test_interestCompoundsAfterOnChainAccrualTouch() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
         uint256 expectedAfter1Year = borrowAmt + (borrowAmt * rate) / MAX_BPS;
-        assertApproxEqAbs(
-            strategy.totalDebt(),
-            expectedAfter1Year,
-            1,
-            "year 1 interest"
-        );
+        assertApproxEqAbs(strategy.totalDebt(), expectedAfter1Year, 1, "year 1 interest");
 
         // Force on-chain accrual by posting tiny collateral
         uint256 tiny = 1;
@@ -1053,9 +863,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedAfter2Years = expectedAfter1Year +
-            (expectedAfter1Year * rate) /
-            MAX_BPS;
+        uint256 expectedAfter2Years = expectedAfter1Year + (expectedAfter1Year * rate) / MAX_BPS;
         assertApproxEqAbs(
             strategy.totalDebt(),
             expectedAfter2Years,
@@ -1065,29 +873,21 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_totalDebtViewIncludesPendingInterest() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
         uint256 accrualTimeBefore = strat.lastAccrualTime();
 
         skip(30 days);
 
         uint256 totalOwed = strategy.totalDebt();
         assertGt(totalOwed, borrowAmt, "view should include pending interest");
-        assertEq(
-            strat.lastAccrualTime(),
-            accrualTimeBefore,
-            "view should not accrue debt on-chain"
-        );
+        assertEq(strat.lastAccrualTime(), accrualTimeBefore, "view should not accrue debt on-chain");
     }
 
     function test_interestZeroWithZeroElapsedTime() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         // In the same block, no time has passed
-        assertEq(
-            strategy.totalDebt(),
-            borrowAmt,
-            "no time elapsed means no interest"
-        );
+        assertEq(strategy.totalDebt(), borrowAmt, "no time elapsed means no interest");
     }
 
     function test_noInterestIfNoDebt() public {
@@ -1099,7 +899,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_interestAccruesOnReducedDebtAfterRepay() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 halfRepayAmount = borrowAmt / 2;
         airdrop(asset, borrower, halfRepayAmount);
@@ -1115,12 +915,7 @@ contract ComprehensiveTest is Setup {
         uint256 expectedNewInterest = (debtAfterRepay * rate) / MAX_BPS;
         uint256 totalExpected = debtAfterRepay + expectedNewInterest;
 
-        assertApproxEqAbs(
-            strategy.totalDebt(),
-            totalExpected,
-            1,
-            "interest should accrue on reduced debt"
-        );
+        assertApproxEqAbs(strategy.totalDebt(), totalExpected, 1, "interest should accrue on reduced debt");
     }
 
     function test_interestCalculationPrecisionOverLongPeriod() public {
@@ -1141,19 +936,10 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, rate, MAX_BPS),
-            365 days,
-            365 days
-        );
+        uint256 expectedInterest = Math.mulDiv(Math.mulDiv(borrowAmt, rate, MAX_BPS), 365 days, 365 days);
 
         uint256 totalOwed = strategy.totalDebt();
-        assertApproxEqAbs(
-            totalOwed,
-            borrowAmt + expectedInterest,
-            1,
-            "exact interest calculation over 365 days"
-        );
+        assertApproxEqAbs(totalOwed, borrowAmt + expectedInterest, 1, "exact interest calculation over 365 days");
     }
 
     function test_interestAccruesOnEachOperation() public {
@@ -1170,11 +956,7 @@ contract ComprehensiveTest is Setup {
         collateral.approve(address(strategy), extra);
         strategy.postCollateral(extra);
         vm.stopPrank();
-        assertEq(
-            strat.lastAccrualTime(),
-            time1,
-            "accrual after postCollateral"
-        );
+        assertEq(strat.lastAccrualTime(), time1, "accrual after postCollateral");
 
         skip(1 days);
         uint256 time2 = block.timestamp;
@@ -1207,15 +989,11 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount);
 
         assertEq(strategy.calledDebt(), callAmount, "calledDebt set");
-        assertEq(
-            strategy.callDeadline(),
-            block.timestamp + callDuration,
-            "deadline should be now + callDuration"
-        );
+        assertEq(strategy.callDeadline(), block.timestamp + callDuration, "deadline should be now + callDuration");
     }
 
     function test_callDebtReducesMaxDebt() public {
-        (uint256 liquidity, , uint256 borrowAmt) = _setupPosition();
+        (uint256 liquidity,, uint256 borrowAmt) = _setupPosition();
 
         uint256 maxDebtBefore = strategy.maxDebt();
         uint256 callAmount = borrowAmt / 4;
@@ -1223,29 +1001,21 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(callAmount);
 
-        assertEq(
-            strategy.maxDebt(),
-            maxDebtBefore - callAmount,
-            "maxDebt should decrease by called amount"
-        );
+        assertEq(strategy.maxDebt(), maxDebtBefore - callAmount, "maxDebt should decrease by called amount");
     }
 
     function test_callDebtCapsAtUncalledDebt() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         // Call more than total debt
         vm.prank(management);
         strategy.callDebt(borrowAmt * 2);
 
-        assertEq(
-            strategy.calledDebt(),
-            borrowAmt,
-            "called debt should cap at total debt"
-        );
+        assertEq(strategy.calledDebt(), borrowAmt, "called debt should cap at total debt");
     }
 
     function test_callDebtRevertsWhenFullyCalled() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -1265,7 +1035,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_duringActiveCallBorrowBlocked() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
         uint256 oneUsdc = toAssetAmount(1);
 
         vm.prank(management);
@@ -1277,7 +1047,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_duringActiveCallWithdrawCollateralBlocked() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 2);
@@ -1288,7 +1058,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_afterFullRepayOfCalledDebtCallClears() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -1310,7 +1080,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_afterPartialRepayOfCalledDebtCallStillActive() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -1324,11 +1094,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(partialRepay);
         vm.stopPrank();
 
-        assertEq(
-            strategy.calledDebt(),
-            callAmount - partialRepay,
-            "remaining called debt"
-        );
+        assertEq(strategy.calledDebt(), callAmount - partialRepay, "remaining called debt");
         assertGt(strategy.callDeadline(), 0, "deadline should remain active");
     }
 
@@ -1349,11 +1115,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(callAmount2);
 
-        assertEq(
-            strategy.calledDebt(),
-            callAmount1 + callAmount2,
-            "after second call"
-        );
+        assertEq(strategy.calledDebt(), callAmount1 + callAmount2, "after second call");
     }
 
     function test_multipleCallsExtendDeadline() public {
@@ -1372,16 +1134,8 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount2);
         uint256 secondDeadline = strategy.callDeadline();
 
-        assertGt(
-            secondDeadline,
-            firstDeadline,
-            "second call should extend deadline"
-        );
-        assertEq(
-            secondDeadline,
-            block.timestamp + callDuration,
-            "new deadline from current timestamp"
-        );
+        assertGt(secondDeadline, firstDeadline, "second call should extend deadline");
+        assertEq(secondDeadline, block.timestamp + callDuration, "new deadline from current timestamp");
     }
 
     function test_callDebtReducesMaxDebtToZeroWithSaturation() public {
@@ -1400,11 +1154,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strategy.callDebt(borrowAmt);
 
-        assertEq(
-            strategy.maxDebt(),
-            0,
-            "maxDebt should be zero when fully called"
-        );
+        assertEq(strategy.maxDebt(), 0, "maxDebt should be zero when fully called");
     }
 
     // ================================================================
@@ -1422,11 +1172,7 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, repayAmt);
         vm.startPrank(management);
         asset.approve(address(strategy), repayAmt);
-        (uint256 actualRepaid, uint256 seized) = strategy.liquidate(
-            repayAmt,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid, uint256 seized) = strategy.liquidate(repayAmt, management, bytes(""));
         vm.stopPrank();
 
         assertGt(actualRepaid, 0, "should repay some debt");
@@ -1434,7 +1180,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_liquidateWhenCallIsOverdueButSolvent() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1443,21 +1189,14 @@ contract ComprehensiveTest is Setup {
         skip(callDuration + 1);
 
         assertTrue(strategy.isSolvent(), "position should still be solvent");
-        assertFalse(
-            strategy.isHealthy(),
-            "should not be healthy (overdue call)"
-        );
+        assertFalse(strategy.isHealthy(), "should not be healthy (overdue call)");
 
         setLiquidator(liquidator, true);
         airdrop(asset, liquidator, callAmount);
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            callAmount,
-            liquidator,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(callAmount, liquidator, bytes(""));
         vm.stopPrank();
 
         assertGt(actualRepaid, 0, "should allow liquidation when call overdue");
@@ -1476,7 +1215,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_liquidateSeizesCorrectCollateralByOraclePrice() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1491,22 +1230,14 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (, uint256 seized) = strategy.liquidate(
-            callAmount,
-            liquidator,
-            bytes("")
-        );
+        (, uint256 seized) = strategy.liquidate(callAmount, liquidator, bytes(""));
         vm.stopPrank();
 
-        assertEq(
-            seized,
-            expectedCollateral,
-            "seized collateral should match price conversion"
-        );
+        assertEq(seized, expectedCollateral, "seized collateral should match price conversion");
     }
 
     function test_liquidateOverdueSolventCapsAtCalledDebtAmount() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1519,23 +1250,15 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, borrowAmt);
         vm.startPrank(management);
         asset.approve(address(strategy), borrowAmt);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            borrowAmt,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(borrowAmt, management, bytes(""));
         vm.stopPrank();
 
         // When solvent + call overdue, maxRepay = calledDebt
-        assertEq(
-            actualRepaid,
-            callAmount,
-            "liquidation should be capped at called amount when solvent"
-        );
+        assertEq(actualRepaid, callAmount, "liquidation should be capped at called amount when solvent");
     }
 
     function test_liquidateInsolventCapsAtTotalDebt() public {
-        (, uint256 collateralAmt, ) = _makeInsolvent();
+        (, uint256 collateralAmt,) = _makeInsolvent();
 
         uint256 totalOwed = strategy.totalDebt();
         uint256 colValue = collateralValue(strategy.totalCollateral());
@@ -1547,18 +1270,10 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, totalOwed * 2);
         vm.startPrank(management);
         asset.approve(address(strategy), totalOwed * 2);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            totalOwed * 2,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(totalOwed * 2, management, bytes(""));
         vm.stopPrank();
 
-        assertLe(
-            actualRepaid,
-            expectedCap,
-            "repaid should be capped appropriately"
-        );
+        assertLe(actualRepaid, expectedCap, "repaid should be capped appropriately");
     }
 
     function test_liquidateCapsRepayAtCollateralValue() public {
@@ -1586,22 +1301,14 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, totalOwed);
         vm.startPrank(management);
         asset.approve(address(strategy), totalOwed);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            totalOwed,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(totalOwed, management, bytes(""));
         vm.stopPrank();
 
-        assertLe(
-            actualRepaid,
-            colValue,
-            "repaid should be capped by collateral value"
-        );
+        assertLe(actualRepaid, colValue, "repaid should be capped by collateral value");
     }
 
     function test_liquidateTransfersCollateralToReceiver() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1614,22 +1321,14 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, callAmount);
         vm.startPrank(management);
         asset.approve(address(strategy), callAmount);
-        (, uint256 seized) = strategy.liquidate(
-            callAmount,
-            receiver,
-            bytes("")
-        );
+        (, uint256 seized) = strategy.liquidate(callAmount, receiver, bytes(""));
         vm.stopPrank();
 
-        assertEq(
-            collateral.balanceOf(receiver),
-            receiverBefore + seized,
-            "receiver should get seized collateral"
-        );
+        assertEq(collateral.balanceOf(receiver), receiverBefore + seized, "receiver should get seized collateral");
     }
 
     function test_liquidateWithDataCallsReceiverCallback() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1643,49 +1342,24 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, address(callbackReceiver), callAmount);
 
         uint256 strategyAssetBefore = asset.balanceOf(address(strategy));
-        uint256 receiverCollateralBefore = collateral.balanceOf(
-            address(callbackReceiver)
-        );
+        uint256 receiverCollateralBefore = collateral.balanceOf(address(callbackReceiver));
 
-        (uint256 actualRepaid, uint256 seized) = callbackReceiver
-            .executeLiquidation(callAmount, callbackData);
+        (uint256 actualRepaid, uint256 seized) = callbackReceiver.executeLiquidation(callAmount, callbackData);
 
         assertTrue(callbackReceiver.callbackHit(), "callback should fire");
-        assertEq(
-            callbackReceiver.callbackToken(),
-            address(collateral),
-            "callback token"
-        );
-        assertEq(
-            callbackReceiver.callbackSender(),
-            address(callbackReceiver),
-            "callback sender"
-        );
+        assertEq(callbackReceiver.callbackToken(), address(collateral), "callback token");
+        assertEq(callbackReceiver.callbackSender(), address(callbackReceiver), "callback sender");
         assertEq(callbackReceiver.callbackAmount(), seized, "callback amount");
+        assertEq(callbackReceiver.callbackAmountNeeded(), actualRepaid, "callback amount needed");
+        assertEq(callbackReceiver.callbackDataHash(), keccak256(callbackData), "callback data");
         assertEq(
-            callbackReceiver.callbackAmountNeeded(),
-            actualRepaid,
-            "callback amount needed"
+            collateral.balanceOf(address(callbackReceiver)), receiverCollateralBefore + seized, "receiver collateral"
         );
-        assertEq(
-            callbackReceiver.callbackDataHash(),
-            keccak256(callbackData),
-            "callback data"
-        );
-        assertEq(
-            collateral.balanceOf(address(callbackReceiver)),
-            receiverCollateralBefore + seized,
-            "receiver collateral"
-        );
-        assertEq(
-            asset.balanceOf(address(strategy)),
-            strategyAssetBefore + actualRepaid,
-            "strategy repayment"
-        );
+        assertEq(asset.balanceOf(address(strategy)), strategyAssetBefore + actualRepaid, "strategy repayment");
     }
 
     function test_liquidateTransfersRepaymentToStrategy() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1697,11 +1371,7 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, callAmount);
         vm.startPrank(management);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            callAmount,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(callAmount, management, bytes(""));
         vm.stopPrank();
 
         assertEq(
@@ -1712,7 +1382,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_liquidateByNonManagementNonLiquidatorReverts() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -1727,7 +1397,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_partialLiquidationLeavesRemainingDebtAndCollateral() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -1739,28 +1409,16 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), partialAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            partialAmount,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(partialAmount, management, bytes(""));
         vm.stopPrank();
 
-        assertEq(
-            actualRepaid,
-            partialAmount,
-            "should allow partial liquidation"
-        );
+        assertEq(actualRepaid, partialAmount, "should allow partial liquidation");
         assertGt(strategy.totalDebt(), 0, "debt should still remain");
-        assertGt(
-            strategy.totalCollateral(),
-            0,
-            "collateral should still remain"
-        );
+        assertGt(strategy.totalCollateral(), 0, "collateral should still remain");
     }
 
     function test_liquidationClearsCallWhenAllCalledDebtLiquidated() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -1772,20 +1430,12 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), callAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            callAmount,
-            liquidator,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(callAmount, liquidator, bytes(""));
         vm.stopPrank();
 
         assertEq(strategy.calledDebt(), 0, "called debt should be cleared");
         assertEq(strategy.callDeadline(), 0, "deadline should be cleared");
-        assertEq(
-            actualRepaid,
-            callAmount,
-            "full called amount should be repaid"
-        );
+        assertEq(actualRepaid, callAmount, "full called amount should be repaid");
     }
 
     function test_liquidateCollateralSeizedCappedAtTotalCollateral() public {
@@ -1811,18 +1461,10 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, colValue);
         vm.startPrank(management);
         asset.approve(address(strategy), colValue);
-        (, uint256 seized) = strategy.liquidate(
-            colValue,
-            management,
-            bytes("")
-        );
+        (, uint256 seized) = strategy.liquidate(colValue, management, bytes(""));
         vm.stopPrank();
 
-        assertLe(
-            seized,
-            colBefore,
-            "seized should not exceed total collateral"
-        );
+        assertLe(seized, colBefore, "seized should not exceed total collateral");
     }
 
     // ================================================================
@@ -1849,11 +1491,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(user);
         strategy.withdraw(withdrawAmt, user, user);
 
-        assertEq(
-            strategy.maxDebt(),
-            amount - withdrawAmt,
-            "maxDebt should decrease on withdraw"
-        );
+        assertEq(strategy.maxDebt(), amount - withdrawAmt, "maxDebt should decrease on withdraw");
     }
 
     function test_withdrawOfRepaidInterestReturnsMaxDebtToDeposit() public {
@@ -1877,25 +1515,15 @@ contract ComprehensiveTest is Setup {
         strategy.repay(interestAmount);
         vm.stopPrank();
 
-        assertEq(
-            strategy.maxDebt(),
-            depositAmount + interestAmount,
-            "interest should grow maxDebt before withdrawal"
-        );
+        assertEq(strategy.maxDebt(), depositAmount + interestAmount, "interest should grow maxDebt before withdrawal");
 
         vm.prank(user);
         strategy.withdraw(interestAmount, user, user);
 
-        assertEq(
-            strategy.maxDebt(),
-            depositAmount,
-            "withdrawing repaid interest should restore maxDebt to deposit"
-        );
+        assertEq(strategy.maxDebt(), depositAmount, "withdrawing repaid interest should restore maxDebt to deposit");
     }
 
-    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt()
-        public
-    {
+    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt() public {
         uint256 deposit = toAssetAmount(100_000);
         uint256 collateralAmt = defaultCollateralAmount();
         uint256 borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -1926,16 +1554,8 @@ contract ComprehensiveTest is Setup {
         strategy.withdraw(callAmount, user, user);
 
         // maxDebt should NOT decrease further because withdrawal consumed repaidCalledDebt
-        assertEq(
-            strategy.maxDebt(),
-            maxDebtAfterRepay,
-            "maxDebt unchanged when consuming repaidCalledDebt"
-        );
-        assertEq(
-            strategy.repaidCalledDebt(),
-            0,
-            "repaidCalledDebt should be consumed"
-        );
+        assertEq(strategy.maxDebt(), maxDebtAfterRepay, "maxDebt unchanged when consuming repaidCalledDebt");
+        assertEq(strategy.repaidCalledDebt(), 0, "repaidCalledDebt should be consumed");
     }
 
     function test_multipleDepositsFromDifferentUsersAccumulateMaxDebt() public {
@@ -1974,11 +1594,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(user);
         strategy.withdraw(deposit, user, user);
 
-        assertEq(
-            strategy.maxDebt(),
-            0,
-            "maxDebt should be 0 after full withdraw"
-        );
+        assertEq(strategy.maxDebt(), 0, "maxDebt should be 0 after full withdraw");
     }
 
     function test_multipleDepositsAndWithdrawsTrackMaxDebt() public {
@@ -2013,19 +1629,11 @@ contract ComprehensiveTest is Setup {
         vm.prank(keeper);
         strategy.report();
 
-        assertEq(
-            strategy.totalAssets(),
-            amount,
-            "with no debt, totalAssets should be idle"
-        );
+        assertEq(strategy.totalAssets(), amount, "with no debt, totalAssets should be idle");
     }
 
     function test_reportWithDebtReturnsIdlePlusMinDebtCollateralValue() public {
-        (
-            uint256 liquidity,
-            uint256 collateralAmt,
-            uint256 borrowAmt
-        ) = _setupPosition();
+        (uint256 liquidity, uint256 collateralAmt, uint256 borrowAmt) = _setupPosition();
 
         skip(30 days);
 
@@ -2038,9 +1646,7 @@ contract ComprehensiveTest is Setup {
         assertGt(strategy.totalAssets(), 0, "totalAssets should be positive");
     }
 
-    function test_reportWithDebtExceedingCollateralValueCapsAtCollateralValue()
-        public
-    {
+    function test_reportWithDebtExceedingCollateralValueCapsAtCollateralValue() public {
         // Use small collateral to make debt exceed collateral value after interest
         uint256 liquidity = defaultLiquidityAmount();
         uint256 collateralAmt = toCollateralAmount(100);
@@ -2071,11 +1677,7 @@ contract ComprehensiveTest is Setup {
         uint256 expected = idle + colValue;
 
         // totalAssets may differ slightly due to profit unlock mechanics, but should be in the ballpark
-        assertLe(
-            strategy.totalAssets(),
-            expected + liquidity,
-            "totalAssets should be conservative"
-        );
+        assertLe(strategy.totalAssets(), expected + liquidity, "totalAssets should be conservative");
     }
 
     function test_reportWithZeroCollateralButDebtReturnsOnlyIdle() public {
@@ -2111,16 +1713,12 @@ contract ComprehensiveTest is Setup {
 
             // totalAssets should be at most the idle balance
             // (profit unlock may cause some variance)
-            assertGe(
-                asset.balanceOf(address(strategy)),
-                0,
-                "should still have some idle balance"
-            );
+            assertGe(asset.balanceOf(address(strategy)), 0, "should still have some idle balance");
         }
     }
 
     function test_profitFromInterestRepaymentReported() public {
-        (uint256 liquidity, , uint256 borrowAmt) = _setupPosition();
+        (uint256 liquidity,, uint256 borrowAmt) = _setupPosition();
 
         // Set profit unlock time
         vm.prank(management);
@@ -2173,7 +1771,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_shutdownAllowsRepay() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(emergencyAdmin);
         strategy.shutdownStrategy();
@@ -2198,15 +1796,11 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.withdrawCollateral(collateralAmt, borrower);
 
-        assertEq(
-            strategy.totalCollateral(),
-            0,
-            "should withdraw after shutdown"
-        );
+        assertEq(strategy.totalCollateral(), 0, "should withdraw after shutdown");
     }
 
     function test_shutdownAllowsLiquidation() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 5);
@@ -2220,14 +1814,14 @@ contract ComprehensiveTest is Setup {
         airdrop(asset, management, liqAmt);
         vm.startPrank(management);
         asset.approve(address(strategy), liqAmt);
-        (uint256 repaid, ) = strategy.liquidate(liqAmt, management, bytes(""));
+        (uint256 repaid,) = strategy.liquidate(liqAmt, management, bytes(""));
         vm.stopPrank();
 
         assertGt(repaid, 0, "liquidation should work after shutdown");
     }
 
     function test_shutdownCallDebtLiquidationFlow() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         // Shutdown
         vm.prank(emergencyAdmin);
@@ -2246,11 +1840,7 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), borrowAmt);
-        (uint256 repaid, ) = strategy.liquidate(
-            borrowAmt,
-            liquidator,
-            bytes("")
-        );
+        (uint256 repaid,) = strategy.liquidate(borrowAmt, liquidator, bytes(""));
         vm.stopPrank();
 
         assertGt(repaid, 0, "full flow should work");
@@ -2261,16 +1851,12 @@ contract ComprehensiveTest is Setup {
     // ================================================================
 
     function test_totalDebtIncludesPendingInterest() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(30 days);
 
         uint256 totalOwed = strategy.totalDebt();
-        assertGt(
-            totalOwed,
-            borrowAmt,
-            "totalDebt should include pending interest"
-        );
+        assertGt(totalOwed, borrowAmt, "totalDebt should include pending interest");
     }
 
     function test_isSolventReturnsTrueWhenHealthy() public {
@@ -2288,7 +1874,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_isHealthyReturnsFalseWhenCallOverdueEvenIfSolvent() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 4);
@@ -2296,10 +1882,7 @@ contract ComprehensiveTest is Setup {
         skip(callDuration + 1);
 
         assertTrue(strategy.isSolvent(), "should still be solvent");
-        assertFalse(
-            strategy.isHealthy(),
-            "overdue call makes position unhealthy"
-        );
+        assertFalse(strategy.isHealthy(), "overdue call makes position unhealthy");
     }
 
     function test_isHealthyReturnsTrueWhenSolventNoCall() public {
@@ -2335,11 +1918,7 @@ contract ComprehensiveTest is Setup {
         vm.stopPrank();
 
         if (strategy.totalDebt() > 0 && strategy.totalCollateral() == 0) {
-            assertEq(
-                strategy.currentLtv(),
-                type(uint256).max,
-                "LTV should be max with no collateral"
-            );
+            assertEq(strategy.currentLtv(), type(uint256).max, "LTV should be max with no collateral");
         }
     }
 
@@ -2357,11 +1936,7 @@ contract ComprehensiveTest is Setup {
         uint256 colValue = collateralValue(collateralAmt);
         uint256 expectedLtv = Math.mulDiv(borrowAmt, 1e18, colValue);
 
-        assertEq(
-            strategy.currentLtv(),
-            expectedLtv,
-            "LTV should match manual calculation"
-        );
+        assertEq(strategy.currentLtv(), expectedLtv, "LTV should match manual calculation");
     }
 
     // ================================================================
@@ -2378,25 +1953,15 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strat.rescue(address(unrelated));
 
-        assertEq(
-            unrelated.balanceOf(management),
-            receiverBefore + amount,
-            "receiver should get rescued tokens"
-        );
-        assertEq(
-            unrelated.balanceOf(address(strategy)),
-            0,
-            "strategy should have 0 unrelated token"
-        );
+        assertEq(unrelated.balanceOf(management), receiverBefore + amount, "receiver should get rescued tokens");
+        assertEq(unrelated.balanceOf(address(strategy)), 0, "strategy should have 0 unrelated token");
     }
 
     // ================================================================
     //          14. EDGE CASES & INTEGRATION TESTS
     // ================================================================
 
-    function test_fullLifecycleDepositPostBorrowAccrueRepayWithdrawCollateralWithdraw()
-        public
-    {
+    function test_fullLifecycleDepositPostBorrowAccrueRepayWithdrawCollateralWithdraw() public {
         // Step 1: Deposit liquidity
         uint256 liquidity = defaultLiquidityAmount();
         mintAndDepositIntoStrategy(strategy, user, liquidity);
@@ -2405,11 +1970,7 @@ contract ComprehensiveTest is Setup {
         // Step 2: Post collateral
         uint256 collateralAmt = defaultCollateralAmount();
         postCollateral(collateralAmt);
-        assertEq(
-            strategy.totalCollateral(),
-            collateralAmt,
-            "collateral posted"
-        );
+        assertEq(strategy.totalCollateral(), collateralAmt, "collateral posted");
 
         // Step 3: Borrow
         uint256 borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -2464,10 +2025,8 @@ contract ComprehensiveTest is Setup {
         assertLe(strategy.currentLtv(), lltv, "LTV should be at or below LLTV");
     }
 
-    function test_repayExactlyTheInterestAmountReturnsDebtToBorrowAmount()
-        public
-    {
-        (, , uint256 borrowAmt) = _setupPosition();
+    function test_repayExactlyTheInterestAmountReturnsDebtToBorrowAmount() public {
+        (,, uint256 borrowAmt) = _setupPosition();
 
         skip(365 days);
 
@@ -2480,12 +2039,7 @@ contract ComprehensiveTest is Setup {
         strategy.repay(expectedInterest);
         vm.stopPrank();
 
-        assertApproxEqAbs(
-            strategy.totalDebt(),
-            borrowAmt,
-            1,
-            "remaining debt should return to borrow amount"
-        );
+        assertApproxEqAbs(strategy.totalDebt(), borrowAmt, 1, "remaining debt should return to borrow amount");
     }
 
     function test_callExactlyAllDebt() public {
@@ -2499,11 +2053,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(borrowAmt, borrower);
 
-        assertEq(
-            strategy.maxDebt(),
-            borrowAmt,
-            "maxDebt should equal borrowAmt"
-        );
+        assertEq(strategy.maxDebt(), borrowAmt, "maxDebt should equal borrowAmt");
 
         vm.prank(management);
         strategy.callDebt(borrowAmt);
@@ -2512,10 +2062,8 @@ contract ComprehensiveTest is Setup {
         assertEq(strategy.maxDebt(), 0, "maxDebt should be 0");
     }
 
-    function test_liquidateWithRepayAmountExceedingMaxRepayCapsCorrectly()
-        public
-    {
-        (, , uint256 borrowAmt) = _setupPosition();
+    function test_liquidateWithRepayAmountExceedingMaxRepayCapsCorrectly() public {
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 5;
         vm.prank(management);
@@ -2528,19 +2076,11 @@ contract ComprehensiveTest is Setup {
 
         vm.startPrank(management);
         asset.approve(address(strategy), hugeAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            hugeAmount,
-            management,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(hugeAmount, management, bytes(""));
         vm.stopPrank();
 
         // Should be capped at calledDebt since position is still solvent
-        assertEq(
-            actualRepaid,
-            callAmount,
-            "repaid should be capped at called amount"
-        );
+        assertEq(actualRepaid, callAmount, "repaid should be capped at called amount");
     }
 
     function test_zeroDebtScenariosAllBehaveCorrectly() public {
@@ -2560,11 +2100,7 @@ contract ComprehensiveTest is Setup {
         // Post tiny collateral
         uint256 tinyCollateral = 1;
         postCollateral(tinyCollateral);
-        assertEq(
-            strategy.totalCollateral(),
-            tinyCollateral,
-            "1 wei collateral"
-        );
+        assertEq(strategy.totalCollateral(), tinyCollateral, "1 wei collateral");
 
         // Withdraw tiny collateral
         vm.prank(borrower);
@@ -2583,11 +2119,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         strategy.borrow(liquidity, borrower);
 
-        assertEq(
-            strategy.totalDebt(),
-            liquidity,
-            "should borrow exact maxDebt"
-        );
+        assertEq(strategy.totalDebt(), liquidity, "should borrow exact maxDebt");
     }
 
     function test_fullLifecycleMultipleDepositorsAndCallCycles() public {
@@ -2672,11 +2204,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(user);
         strategy.withdraw(amount, user, user);
 
-        assertEq(
-            asset.balanceOf(address(strategy)),
-            0,
-            "strategy should have 0 asset balance"
-        );
+        assertEq(asset.balanceOf(address(strategy)), 0, "strategy should have 0 asset balance");
         assertEq(strategy.maxDebt(), 0, "maxDebt should be 0");
     }
 
@@ -2697,19 +2225,11 @@ contract ComprehensiveTest is Setup {
 
     function test_availableDepositLimitAllowed() public {
         setAllowed(user, true);
-        assertEq(
-            strategy.availableDepositLimit(user),
-            type(uint256).max,
-            "allowed user should have max deposit limit"
-        );
+        assertEq(strategy.availableDepositLimit(user), type(uint256).max, "allowed user should have max deposit limit");
     }
 
     function test_availableDepositLimitNotAllowed() public {
-        assertEq(
-            strategy.availableDepositLimit(stranger),
-            0,
-            "non-allowed user should have 0 deposit limit"
-        );
+        assertEq(strategy.availableDepositLimit(stranger), 0, "non-allowed user should have 0 deposit limit");
     }
 
     function test_availableDepositLimitShutdown() public {
@@ -2718,11 +2238,7 @@ contract ComprehensiveTest is Setup {
         vm.prank(emergencyAdmin);
         strategy.shutdownStrategy();
 
-        assertEq(
-            strategy.availableDepositLimit(user),
-            0,
-            "shutdown strategy should have 0 deposit limit"
-        );
+        assertEq(strategy.availableDepositLimit(user), 0, "shutdown strategy should have 0 deposit limit");
     }
 
     function test_availableWithdrawLimitReturnsBalance() public {
@@ -2779,24 +2295,16 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         strat.setDoHealthCheck(false);
 
-        uint256 feeRecipientSharesBefore = strategy.balanceOf(
-            performanceFeeRecipient
-        );
+        uint256 feeRecipientSharesBefore = strategy.balanceOf(performanceFeeRecipient);
 
         vm.prank(keeper);
-        (uint256 profit, ) = strategy.report();
+        (uint256 profit,) = strategy.report();
 
         assertGt(profit, 0, "should have profit");
 
-        uint256 feeRecipientSharesAfter = strategy.balanceOf(
-            performanceFeeRecipient
-        );
+        uint256 feeRecipientSharesAfter = strategy.balanceOf(performanceFeeRecipient);
 
-        assertGt(
-            feeRecipientSharesAfter,
-            feeRecipientSharesBefore,
-            "fee recipient should receive shares"
-        );
+        assertGt(feeRecipientSharesAfter, feeRecipientSharesBefore, "fee recipient should receive shares");
     }
 
     // ================================================================
@@ -2846,7 +2354,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_repayEmitsEvent() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 repayAmt = borrowAmt / 2;
         airdrop(asset, borrower, repayAmt);
@@ -2863,7 +2371,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_callDebtEmitsEvent() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         uint256 expectedDeadline = block.timestamp + callDuration;
@@ -2876,7 +2384,7 @@ contract ComprehensiveTest is Setup {
     }
 
     function test_callClearedEmitsEvent() public {
-        (, , uint256 borrowAmt) = _setupPosition();
+        (,, uint256 borrowAmt) = _setupPosition();
 
         uint256 callAmount = borrowAmt / 4;
         vm.prank(management);
@@ -2913,14 +2421,7 @@ contract ComprehensiveTest is Setup {
         asset.approve(address(strategy), callAmount);
 
         vm.expectEmit(true, true, true, true);
-        emit Liquidated(
-            liquidator,
-            liquidator,
-            callAmount,
-            expectedSeized,
-            expectedDebtAfter,
-            expectedCollateralAfter
-        );
+        emit Liquidated(liquidator, liquidator, callAmount, expectedSeized, expectedDebtAfter, expectedCollateralAfter);
 
         strategy.liquidate(callAmount, liquidator, bytes(""));
         vm.stopPrank();

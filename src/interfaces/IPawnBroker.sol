@@ -60,11 +60,9 @@ interface IPawnBroker is IBaseHealthCheck {
     function callDebt(uint256 _amount) external;
 
     /// @notice Repays debt and seizes collateral from a liquidatable position.
-    function liquidate(
-        uint256 _repayAmount,
-        address _receiver,
-        bytes calldata _data
-    ) external returns (uint256 actualRepaid, uint256 collateralSeized);
+    function liquidate(uint256 _repayAmount, address _receiver, bytes calldata _data)
+        external
+        returns (uint256 actualRepaid, uint256 collateralSeized);
 
     /// @notice Returns current debt including accrued but unapplied interest.
     function totalDebt() external view returns (uint256);

@@ -11,10 +11,7 @@ contract PawnBrokerFactory {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     event NewPawnBroker(
-        address indexed pawnBroker,
-        address indexed asset,
-        address indexed borrower,
-        address collateralAsset
+        address indexed pawnBroker, address indexed asset, address indexed borrower, address collateralAsset
     );
 
     address public immutable EMERGENCY_ADMIN;
@@ -27,12 +24,7 @@ contract PawnBrokerFactory {
     EnumerableSet.AddressSet internal allPawnBrokers;
 
     /// @notice Configures the default roles assigned to newly deployed pawn brokers.
-    constructor(
-        address _management,
-        address _performanceFeeRecipient,
-        address _keeper,
-        address _emergencyAdmin
-    ) {
+    constructor(address _management, address _performanceFeeRecipient, address _keeper, address _emergencyAdmin) {
         management = _management;
         performanceFeeRecipient = _performanceFeeRecipient;
         keeper = _keeper;
@@ -54,29 +46,10 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external virtual returns (address) {
-        bytes32 _key = deploymentKey(
-            _asset,
-            _borrower,
-            _collateralAsset,
-            _oracle,
-            _lltv,
-            _rateBps,
-            _callDuration
-        );
+        bytes32 _key = deploymentKey(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration);
 
         IPawnBroker _newPawnBroker = IPawnBroker(
-            address(
-                new PawnBroker(
-                    _asset,
-                    _name,
-                    _borrower,
-                    _collateralAsset,
-                    _oracle,
-                    _lltv,
-                    _rateBps,
-                    _callDuration
-                )
-            )
+            address(new PawnBroker(_asset, _name, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration))
         );
 
         _newPawnBroker.setPerformanceFeeRecipient(performanceFeeRecipient);
@@ -87,12 +60,7 @@ contract PawnBrokerFactory {
         pawnBrokersByKey[_key].add(address(_newPawnBroker));
         allPawnBrokers.add(address(_newPawnBroker));
 
-        emit NewPawnBroker(
-            address(_newPawnBroker),
-            _asset,
-            _borrower,
-            _collateralAsset
-        );
+        emit NewPawnBroker(address(_newPawnBroker), _asset, _borrower, _collateralAsset);
         return address(_newPawnBroker);
     }
 
@@ -106,18 +74,7 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) public pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encode(
-                    _asset,
-                    _borrower,
-                    _collateralAsset,
-                    _oracle,
-                    _lltv,
-                    _rateBps,
-                    _callDuration
-                )
-            );
+        return keccak256(abi.encode(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration));
     }
 
     /// @notice Returns the most recently deployed pawn broker for a configuration, if one exists.
@@ -130,17 +87,9 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address) {
-        EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[
-            deploymentKey(
-                _asset,
-                _borrower,
-                _collateralAsset,
-                _oracle,
-                _lltv,
-                _rateBps,
-                _callDuration
-            )
-        ];
+        EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[deploymentKey(
+            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
+        )];
         uint256 _length = _pawnBrokers.length();
         if (_length == 0) return address(0);
         return _pawnBrokers.at(_length - 1);
@@ -156,26 +105,13 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address[] memory) {
-        return
-            pawnBrokersByKey[
-                deploymentKey(
-                    _asset,
-                    _borrower,
-                    _collateralAsset,
-                    _oracle,
-                    _lltv,
-                    _rateBps,
-                    _callDuration
-                )
-            ].values();
+        return pawnBrokersByKey[deploymentKey(
+            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
+        )].values();
     }
 
     /// @notice Updates the default pawn broker role addresses.
-    function setAddresses(
-        address _management,
-        address _performanceFeeRecipient,
-        address _keeper
-    ) external {
+    function setAddresses(address _management, address _performanceFeeRecipient, address _keeper) external {
         require(msg.sender == management, "!management");
         management = _management;
         performanceFeeRecipient = _performanceFeeRecipient;
@@ -183,9 +119,7 @@ contract PawnBrokerFactory {
     }
 
     /// @notice Returns whether a pawn broker address was deployed by this factory.
-    function isDeployedPawnBroker(
-        address _pawnBroker
-    ) external view returns (bool) {
+    function isDeployedPawnBroker(address _pawnBroker) external view returns (bool) {
         return allPawnBrokers.contains(_pawnBroker);
     }
 }

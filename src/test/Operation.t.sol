@@ -152,11 +152,7 @@ contract OperationTest is Setup {
 
         vm.startPrank(liquidator);
         asset.approve(address(strategy), borrowAmount);
-        (uint256 actualRepaid, ) = strategy.liquidate(
-            borrowAmount,
-            liquidator,
-            bytes("")
-        );
+        (uint256 actualRepaid,) = strategy.liquidate(borrowAmount, liquidator, bytes(""));
         vm.stopPrank();
 
         assertEq(strategy.calledDebt(), 0);

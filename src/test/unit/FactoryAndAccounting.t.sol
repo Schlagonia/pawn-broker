@@ -23,11 +23,7 @@ contract MockProtocolFeeFactory {
 contract MockERC20 is ERC20 {
     uint8 internal immutable assetDecimals;
 
-    constructor(
-        string memory name_,
-        string memory symbol_,
-        uint8 decimals_
-    ) ERC20(name_, symbol_) {
+    constructor(string memory name_, string memory symbol_, uint8 decimals_) ERC20(name_, symbol_) {
         assetDecimals = decimals_;
     }
 
@@ -41,8 +37,7 @@ contract MockERC20 is ERC20 {
 }
 
 abstract contract LocalSetup is Test {
-    address internal constant TOKENIZED_STRATEGY =
-        0xD377919FA87120584B21279a491F82D5265A139c;
+    address internal constant TOKENIZED_STRATEGY = 0xD377919FA87120584B21279a491F82D5265A139c;
 
     uint256 internal constant LLTV = 8e17;
     uint256 internal constant RATE = 500;
@@ -66,9 +61,7 @@ abstract contract LocalSetup is Test {
 
     function setUp() public virtual {
         protocolFeeFactory = new MockProtocolFeeFactory();
-        TokenizedStrategy implementation = new TokenizedStrategy(
-            address(protocolFeeFactory)
-        );
+        TokenizedStrategy implementation = new TokenizedStrategy(address(protocolFeeFactory));
         vm.etch(TOKENIZED_STRATEGY, address(implementation).code);
 
         asset = new MockERC20("Mock Asset", "AST", 18);
@@ -76,12 +69,7 @@ abstract contract LocalSetup is Test {
         oracle = new MockMorphoOracle();
         oracle.setPrice(INITIAL_ORACLE_PRICE);
 
-        pawnBrokerFactory = new PawnBrokerFactory(
-            management,
-            performanceFeeRecipient,
-            keeper,
-            emergencyAdmin
-        );
+        pawnBrokerFactory = new PawnBrokerFactory(management, performanceFeeRecipient, keeper, emergencyAdmin);
 
         strategy = IHealthCheckStrategy(
             pawnBrokerFactory.newPawnBroker(
@@ -123,9 +111,7 @@ abstract contract LocalSetup is Test {
 }
 
 contract FactoryRegistryTest is LocalSetup {
-    function test_isDeployedPawnBroker_tracksEveryPawnBrokerForSameAsset()
-        public
-    {
+    function test_isDeployedPawnBroker_tracksEveryPawnBrokerForSameAsset() public {
         address secondStrategy = pawnBrokerFactory.newPawnBroker(
             address(asset),
             "Unit PawnBroker 2",
@@ -142,34 +128,20 @@ contract FactoryRegistryTest is LocalSetup {
 
         assertEq(
             pawnBrokerFactory.pawnBrokerFor(
-                address(asset),
-                borrower,
-                address(collateral),
-                address(oracle),
-                LLTV,
-                RATE,
-                CALL_DURATION
+                address(asset), borrower, address(collateral), address(oracle), LLTV, RATE, CALL_DURATION
             ),
             address(strategy)
         );
 
         assertEq(
             pawnBrokerFactory.pawnBrokerFor(
-                address(asset),
-                secondBorrower,
-                address(collateral),
-                address(oracle),
-                LLTV,
-                RATE,
-                CALL_DURATION
+                address(asset), secondBorrower, address(collateral), address(oracle), LLTV, RATE, CALL_DURATION
             ),
             secondStrategy
         );
     }
 
-    function test_newPawnBroker_allowsDuplicateConfigAndUpdatesLatestLookup()
-        public
-    {
+    function test_newPawnBroker_allowsDuplicateConfigAndUpdatesLatestLookup() public {
         address duplicateStrategy = pawnBrokerFactory.newPawnBroker(
             address(asset),
             "Duplicate PawnBroker",
@@ -186,13 +158,7 @@ contract FactoryRegistryTest is LocalSetup {
         assertNotEq(duplicateStrategy, address(strategy));
 
         address[] memory duplicateMarkets = pawnBrokerFactory.pawnBrokersFor(
-            address(asset),
-            borrower,
-            address(collateral),
-            address(oracle),
-            LLTV,
-            RATE,
-            CALL_DURATION
+            address(asset), borrower, address(collateral), address(oracle), LLTV, RATE, CALL_DURATION
         );
 
         assertEq(duplicateMarkets.length, 2);
@@ -201,13 +167,7 @@ contract FactoryRegistryTest is LocalSetup {
 
         assertEq(
             pawnBrokerFactory.pawnBrokerFor(
-                address(asset),
-                borrower,
-                address(collateral),
-                address(oracle),
-                LLTV,
-                RATE,
-                CALL_DURATION
+                address(asset), borrower, address(collateral), address(oracle), LLTV, RATE, CALL_DURATION
             ),
             duplicateStrategy
         );
@@ -318,11 +278,7 @@ contract RateManagementTest is LocalSetup {
         strategy.borrow(borrowAmount, borrower);
     }
 
-    function _interest(
-        uint256 debt,
-        uint256 rate,
-        uint256 elapsed
-    ) internal pure returns (uint256) {
+    function _interest(uint256 debt, uint256 rate, uint256 elapsed) internal pure returns (uint256) {
         uint256 annualInterest = (debt * rate) / MAX_BPS;
         return (annualInterest * elapsed) / SECONDS_PER_YEAR;
     }
@@ -378,15 +334,10 @@ contract RateManagementTest is LocalSetup {
 
         skip(CALL_DURATION - 1);
 
-        assertEq(
-            strategy.totalDebt(),
-            borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION - 1)
-        );
+        assertEq(strategy.totalDebt(), borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION - 1));
     }
 
-    function test_scheduledRateDoesNotAffectDebtPreviewAfterCallDuration()
-        public
-    {
+    function test_scheduledRateDoesNotAffectDebtPreviewAfterCallDuration() public {
         uint256 borrowAmount = 10_000e18;
         _openPosition(borrowAmount);
 
@@ -395,8 +346,7 @@ contract RateManagementTest is LocalSetup {
 
         skip(CALL_DURATION + 1 days);
 
-        uint256 expectedDebt = borrowAmount +
-            _interest(borrowAmount, RATE, CALL_DURATION + 1 days);
+        uint256 expectedDebt = borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1 days);
 
         assertEq(strategy.totalDebt(), expectedDebt);
         assertEq(strategy.rate(), RATE);
@@ -419,10 +369,7 @@ contract RateManagementTest is LocalSetup {
 
         assertEq(strategy.rate(), RATE);
         assertEq(strategy.pendingRate(), NEW_RATE);
-        assertEq(
-            strategy.totalDebt(),
-            borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 1
-        );
+        assertEq(strategy.totalDebt(), borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 1);
     }
 
     function test_applyPendingRateRejectsBeforeCallDuration() public {
@@ -436,9 +383,7 @@ contract RateManagementTest is LocalSetup {
         strategy.applyPendingRate();
     }
 
-    function test_applyPendingRateUsesOldRateThenNewRateForFutureAccrual()
-        public
-    {
+    function test_applyPendingRateUsesOldRateThenNewRateForFutureAccrual() public {
         uint256 borrowAmount = 10_000e18;
         _openPosition(borrowAmount);
 
@@ -447,8 +392,7 @@ contract RateManagementTest is LocalSetup {
 
         skip(CALL_DURATION + 1);
 
-        uint256 debtBeforeApply = borrowAmount +
-            _interest(borrowAmount, RATE, CALL_DURATION + 1);
+        uint256 debtBeforeApply = borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1);
 
         vm.prank(management);
         strategy.applyPendingRate();
@@ -460,15 +404,10 @@ contract RateManagementTest is LocalSetup {
 
         skip(1 days);
 
-        assertEq(
-            strategy.totalDebt(),
-            debtBeforeApply + _interest(debtBeforeApply, NEW_RATE, 1 days)
-        );
+        assertEq(strategy.totalDebt(), debtBeforeApply + _interest(debtBeforeApply, NEW_RATE, 1 days));
     }
 
-    function test_newScheduleOverwritesPendingRateAndResetsEffectiveTime()
-        public
-    {
+    function test_newScheduleOverwritesPendingRateAndResetsEffectiveTime() public {
         vm.prank(management);
         strategy.setRate(NEW_RATE);
 
@@ -492,10 +431,7 @@ contract RateManagementTest is LocalSetup {
 }
 
 contract MaxDebtAccountingTest is LocalSetup {
-    function _openFullUtilizedPosition(
-        uint256 depositAmount,
-        uint256 collateralAmount
-    ) internal {
+    function _openFullUtilizedPosition(uint256 depositAmount, uint256 collateralAmount) internal {
         _allowAndDeposit(user, depositAmount);
         _postCollateral(collateralAmount);
 
@@ -516,9 +452,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(strategy.maxDebt(), depositAmount - withdrawAmount);
     }
 
-    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt()
-        public
-    {
+    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 borrowAmount = 10_000e18;
@@ -550,9 +484,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(strategy.repaidCalledDebt(), 0);
     }
 
-    function test_fullUtilizationPartialRepayThenFullIdleWithdrawCutsMaxDebt()
-        public
-    {
+    function test_fullUtilizationPartialRepayThenFullIdleWithdrawCutsMaxDebt() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 partialRepayAmount = 2_000e18;
@@ -578,9 +510,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_fullUtilizationFullRepayIncludingInterestThenFullWithdrawZerosMaxDebt()
-        public
-    {
+    function test_fullUtilizationFullRepayIncludingInterestThenFullWithdrawZerosMaxDebt() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
 
@@ -618,9 +548,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_fullUtilizationPartialCallRepayCallThenFullIdleWithdrawDoesNotDoubleCutMaxDebt()
-        public
-    {
+    function test_fullUtilizationPartialCallRepayCallThenFullIdleWithdrawDoesNotDoubleCutMaxDebt() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 callAmount = 4_000e18;
@@ -650,9 +578,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_fullUtilizationFullCallPartialRepayThenFullIdleWithdrawKeepsMaxDebtAtZero()
-        public
-    {
+    function test_fullUtilizationFullCallPartialRepayThenFullIdleWithdrawKeepsMaxDebtAtZero() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 partialRepayAmount = 4_000e18;
@@ -684,9 +610,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_withdrawOfRepaidInterestReturnsMaxDebtToOriginalDeposit()
-        public
-    {
+    function test_withdrawOfRepaidInterestReturnsMaxDebtToOriginalDeposit() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 borrowAmount = 8_000e18;
@@ -743,9 +667,7 @@ contract MaxDebtAccountingTest is LocalSetup {
         assertEq(asset.balanceOf(address(strategy)), 0);
     }
 
-    function test_partialCallAccruedInterestLeavesCalledDebtFixedAndGrowsMaxDebt()
-        public
-    {
+    function test_partialCallAccruedInterestLeavesCalledDebtFixedAndGrowsMaxDebt() public {
         uint256 depositAmount = 10_000e18;
         uint256 collateralAmount = 10e18;
         uint256 callAmount = 4_000e18;
