@@ -14,7 +14,9 @@ contract OperationTest is Setup {
         assertEq(strategy.COLLATERAL_ASSET(), address(collateral));
         assertEq(address(strategy.ORACLE()), address(collateralOracle));
         assertEq(strategy.LLTV(), lltv);
-        assertEq(strategy.FIXED_RATE(), fixedRate);
+        assertEq(strategy.rate(), rate);
+        assertEq(strategy.pendingRate(), 0);
+        assertEq(strategy.pendingRateEffectiveTime(), 0);
         assertEq(strategy.CALL_DURATION(), callDuration);
         assertFalse(strategy.liquidators(liquidator));
         assertEq(strategy.totalCollateral(), 0);

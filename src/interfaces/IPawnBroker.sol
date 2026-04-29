@@ -17,8 +17,14 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns the configured LLTV scaled by `1e18`.
     function LLTV() external view returns (uint256);
 
-    /// @notice Returns the fixed annualized rate in basis points.
-    function FIXED_RATE() external view returns (uint256);
+    /// @notice Returns the annualized rate in basis points.
+    function rate() external view returns (uint256);
+
+    /// @notice Returns the next rate scheduled to become active.
+    function pendingRate() external view returns (uint256);
+
+    /// @notice Returns when the pending rate may be applied, or zero.
+    function pendingRateEffectiveTime() external view returns (uint256);
 
     /// @notice Returns the debt-call deadline window in seconds.
     function CALL_DURATION() external view returns (uint256);
@@ -28,6 +34,12 @@ interface IPawnBroker is IBaseHealthCheck {
 
     /// @notice Sets whether an address may liquidate unhealthy or overdue debt.
     function setLiquidator(address _liquidator, bool _isAllowed) external;
+
+    /// @notice Schedules a new annualized rate in basis points.
+    function setRate(uint256 _newRateBps) external;
+
+    /// @notice Applies the pending rate once its delay has elapsed.
+    function applyPendingRate() external;
 
     /// @notice Returns whether an address may liquidate unhealthy or overdue debt.
     function liquidators(address _liquidator) external view returns (bool);

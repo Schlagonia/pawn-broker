@@ -8,7 +8,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 import {ILiquidator} from "./interfaces/ILiquidator.sol";
 
-/// @notice Fixed-rate single-borrower pawn broker secured by posted collateral.
+/// @notice Single-borrower pawn broker secured by posted collateral.
 contract PawnBroker is BaseHooks {
     using SafeERC20 for ERC20;
 
@@ -51,6 +51,8 @@ contract PawnBroker is BaseHooks {
         uint256 totalCollateral
     );
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
+    event RateUpdateScheduled(uint256 newRate, uint256 effectiveTime);
+    event RateUpdated(uint256 oldRate, uint256 newRate);
 
     modifier onlyBorrower() {
         require(msg.sender == BORROWER, "not borrower");
@@ -69,8 +71,6 @@ contract PawnBroker is BaseHooks {
     IMorphoOracle public immutable ORACLE;
     /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
     uint256 public immutable LLTV;
-    /// @dev The fixed annualized interest rate charged on debt, in basis points.
-    uint256 public immutable FIXED_RATE;
     /// @dev The time window the borrower has to satisfy an active debt call.
     uint256 public immutable CALL_DURATION;
 
@@ -78,6 +78,12 @@ contract PawnBroker is BaseHooks {
     uint256 public totalCollateral;
     /// @dev The current borrowable debt ceiling. Called debt is excluded.
     uint256 public maxDebt;
+    /// @dev The active annualized interest rate charged on debt, in basis points.
+    uint256 public rate;
+    /// @dev The next annualized rate scheduled to become active.
+    uint256 public pendingRate;
+    /// @dev The timestamp when `pendingRate` may be applied, or zero.
+    uint256 public pendingRateEffectiveTime;
     /// @dev The stored compounded debt balance after the last accrual update.
     uint256 internal debtAmount;
     /// @dev The timestamp of the last interest accrual.
@@ -101,7 +107,7 @@ contract PawnBroker is BaseHooks {
         address _collateralAsset,
         address _oracle,
         uint256 _lltv,
-        uint256 _fixedRateBps,
+        uint256 _rateBps,
         uint256 _callDuration
     ) BaseHealthCheck(_asset, _name) {
         require(_borrower != address(0), "zero borrower");
@@ -109,13 +115,14 @@ contract PawnBroker is BaseHooks {
         require(_oracle != address(0), "zero oracle");
         require(_collateralAsset != _asset, "shared asset");
         require(_lltv > 0 && _lltv < LLTV_SCALE, "bad lltv");
+        require(_rateBps <= MAX_BPS, "bad rate");
         require(_callDuration > 0, "zero call duration");
 
         BORROWER = _borrower;
         COLLATERAL_ASSET = _collateralAsset;
         ORACLE = IMorphoOracle(_oracle);
         LLTV = _lltv;
-        FIXED_RATE = _fixedRateBps;
+        rate = _rateBps;
         CALL_DURATION = _callDuration;
         lastAccrualTime = block.timestamp;
     }
@@ -132,6 +139,37 @@ contract PawnBroker is BaseHooks {
         require(_liquidator != address(0), "zero liquidator");
         liquidators[_liquidator] = _isAllowed;
         emit LiquidatorUpdated(_liquidator, _isAllowed);
+    }
+
+    /// @notice Schedules a new rate after the call-duration delay.
+    function setRate(uint256 _newRateBps) external onlyManagement {
+        require(_newRateBps <= MAX_BPS, "bad rate");
+
+        uint256 _effectiveTime = block.timestamp + CALL_DURATION;
+        pendingRate = _newRateBps;
+        pendingRateEffectiveTime = _effectiveTime;
+
+        emit RateUpdateScheduled(_newRateBps, _effectiveTime);
+    }
+
+    /// @notice Applies the pending rate once its delay has elapsed.
+    function applyPendingRate() external onlyManagement {
+        uint256 _effectiveTime = pendingRateEffectiveTime;
+        require(
+            _effectiveTime != 0 && block.timestamp >= _effectiveTime,
+            "rate not ready"
+        );
+
+        _accrueInterest();
+
+        uint256 _oldRate = rate;
+        uint256 _newRate = pendingRate;
+
+        rate = _newRate;
+        pendingRate = 0;
+        pendingRateEffectiveTime = 0;
+
+        emit RateUpdated(_oldRate, _newRate);
     }
 
     ////////////////////////////////////////////////////////////////
@@ -485,7 +523,7 @@ contract PawnBroker is BaseHooks {
         uint256 _elapsed = block.timestamp - lastAccrualTime;
         if (_elapsed == 0) return 0;
 
-        uint256 _annualInterest = Math.mulDiv(debtAmount, FIXED_RATE, MAX_BPS);
+        uint256 _annualInterest = Math.mulDiv(debtAmount, rate, MAX_BPS);
         return Math.mulDiv(_annualInterest, _elapsed, SECONDS_PER_YEAR);
     }
 

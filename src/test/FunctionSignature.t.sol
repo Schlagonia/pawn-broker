@@ -67,6 +67,10 @@ contract FunctionSignatureTest is Setup {
         vm.expectRevert("!management");
         strategy.setAllowed(user, true);
         vm.expectRevert("!management");
+        strategy.setRate(1);
+        vm.expectRevert("!management");
+        strategy.applyPendingRate();
+        vm.expectRevert("!management");
         strategy.callDebt(1);
         vm.expectRevert("not borrower");
         strategy.postCollateral(1);

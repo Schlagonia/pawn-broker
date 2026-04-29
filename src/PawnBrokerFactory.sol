@@ -51,7 +51,7 @@ contract PawnBrokerFactory {
         address _collateralAsset,
         address _oracle,
         uint256 _lltv,
-        uint256 _fixedRateBps,
+        uint256 _rateBps,
         uint256 _callDuration
     ) external virtual returns (address) {
         bytes32 _key = deploymentKey(
@@ -60,7 +60,7 @@ contract PawnBrokerFactory {
             _collateralAsset,
             _oracle,
             _lltv,
-            _fixedRateBps,
+            _rateBps,
             _callDuration
         );
 
@@ -73,7 +73,7 @@ contract PawnBrokerFactory {
                     _collateralAsset,
                     _oracle,
                     _lltv,
-                    _fixedRateBps,
+                    _rateBps,
                     _callDuration
                 )
             )
@@ -103,7 +103,7 @@ contract PawnBrokerFactory {
         address _collateralAsset,
         address _oracle,
         uint256 _lltv,
-        uint256 _fixedRateBps,
+        uint256 _rateBps,
         uint256 _callDuration
     ) public pure returns (bytes32) {
         return
@@ -114,7 +114,7 @@ contract PawnBrokerFactory {
                     _collateralAsset,
                     _oracle,
                     _lltv,
-                    _fixedRateBps,
+                    _rateBps,
                     _callDuration
                 )
             );
@@ -127,7 +127,7 @@ contract PawnBrokerFactory {
         address _collateralAsset,
         address _oracle,
         uint256 _lltv,
-        uint256 _fixedRateBps,
+        uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address) {
         EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[
@@ -137,7 +137,7 @@ contract PawnBrokerFactory {
                 _collateralAsset,
                 _oracle,
                 _lltv,
-                _fixedRateBps,
+                _rateBps,
                 _callDuration
             )
         ];
@@ -153,7 +153,7 @@ contract PawnBrokerFactory {
         address _collateralAsset,
         address _oracle,
         uint256 _lltv,
-        uint256 _fixedRateBps,
+        uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address[] memory) {
         return
@@ -164,7 +164,7 @@ contract PawnBrokerFactory {
                     _collateralAsset,
                     _oracle,
                     _lltv,
-                    _fixedRateBps,
+                    _rateBps,
                     _callDuration
                 )
             ].values();

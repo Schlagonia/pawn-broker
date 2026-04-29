@@ -45,7 +45,7 @@ abstract contract LocalSetup is Test {
         0xD377919FA87120584B21279a491F82D5265A139c;
 
     uint256 internal constant LLTV = 8e17;
-    uint256 internal constant FIXED_RATE = 500;
+    uint256 internal constant RATE = 500;
     uint256 internal constant CALL_DURATION = 3 days;
     uint256 internal constant INITIAL_ORACLE_PRICE = 2_500e36;
 
@@ -91,7 +91,7 @@ abstract contract LocalSetup is Test {
                 address(collateral),
                 address(oracle),
                 LLTV,
-                FIXED_RATE,
+                RATE,
                 CALL_DURATION
             )
         );
@@ -133,7 +133,7 @@ contract FactoryRegistryTest is LocalSetup {
             address(collateral),
             address(oracle),
             LLTV,
-            FIXED_RATE,
+            RATE,
             CALL_DURATION
         );
 
@@ -147,7 +147,7 @@ contract FactoryRegistryTest is LocalSetup {
                 address(collateral),
                 address(oracle),
                 LLTV,
-                FIXED_RATE,
+                RATE,
                 CALL_DURATION
             ),
             address(strategy)
@@ -160,7 +160,7 @@ contract FactoryRegistryTest is LocalSetup {
                 address(collateral),
                 address(oracle),
                 LLTV,
-                FIXED_RATE,
+                RATE,
                 CALL_DURATION
             ),
             secondStrategy
@@ -177,7 +177,7 @@ contract FactoryRegistryTest is LocalSetup {
             address(collateral),
             address(oracle),
             LLTV,
-            FIXED_RATE,
+            RATE,
             CALL_DURATION
         );
 
@@ -191,7 +191,7 @@ contract FactoryRegistryTest is LocalSetup {
             address(collateral),
             address(oracle),
             LLTV,
-            FIXED_RATE,
+            RATE,
             CALL_DURATION
         );
 
@@ -206,7 +206,7 @@ contract FactoryRegistryTest is LocalSetup {
                 address(collateral),
                 address(oracle),
                 LLTV,
-                FIXED_RATE,
+                RATE,
                 CALL_DURATION
             ),
             duplicateStrategy
@@ -301,6 +301,193 @@ contract BorrowerRepairTest is LocalSetup {
 
         assertEq(strategy.totalCollateral(), collateralAmount + topUpAmount);
         assertEq(strategy.totalDebt(), borrowAmount);
+    }
+}
+
+contract RateManagementTest is LocalSetup {
+    uint256 internal constant NEW_RATE = 1_000;
+    uint256 internal constant SECOND_RATE = 2_000;
+    uint256 internal constant SECONDS_PER_YEAR = 365 days;
+    uint256 internal constant MAX_BPS = 10_000;
+
+    function _openPosition(uint256 borrowAmount) internal {
+        _allowAndDeposit(user, 100_000e18);
+        _postCollateral(100e18);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+    }
+
+    function _interest(
+        uint256 debt,
+        uint256 rate,
+        uint256 elapsed
+    ) internal pure returns (uint256) {
+        uint256 annualInterest = (debt * rate) / MAX_BPS;
+        return (annualInterest * elapsed) / SECONDS_PER_YEAR;
+    }
+
+    function test_managementCanScheduleRateWithCallDurationDelay() public {
+        uint256 expectedEffectiveTime = block.timestamp + CALL_DURATION;
+
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        assertEq(strategy.rate(), RATE);
+        assertEq(strategy.pendingRate(), NEW_RATE);
+        assertEq(strategy.pendingRateEffectiveTime(), expectedEffectiveTime);
+
+        skip(CALL_DURATION);
+
+        assertEq(strategy.rate(), RATE);
+        assertEq(strategy.pendingRate(), NEW_RATE);
+    }
+
+    function test_nonManagementCannotSetRate() public {
+        vm.prank(borrower);
+        vm.expectRevert("!management");
+        strategy.setRate(NEW_RATE);
+    }
+
+    function test_setRateRejectsRateAboveMaxBps() public {
+        vm.prank(management);
+        vm.expectRevert("bad rate");
+        strategy.setRate(MAX_BPS + 1);
+    }
+
+    function test_constructorRejectsRateAboveMaxBps() public {
+        vm.expectRevert("bad rate");
+        pawnBrokerFactory.newPawnBroker(
+            address(asset),
+            "Bad Rate PawnBroker",
+            borrower,
+            address(collateral),
+            address(oracle),
+            LLTV,
+            MAX_BPS + 1,
+            CALL_DURATION
+        );
+    }
+
+    function test_scheduledRateDoesNotAffectDebtBeforeCallDuration() public {
+        uint256 borrowAmount = 10_000e18;
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(CALL_DURATION - 1);
+
+        assertEq(
+            strategy.totalDebt(),
+            borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION - 1)
+        );
+    }
+
+    function test_scheduledRateDoesNotAffectDebtPreviewAfterCallDuration()
+        public
+    {
+        uint256 borrowAmount = 10_000e18;
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(CALL_DURATION + 1 days);
+
+        uint256 expectedDebt = borrowAmount +
+            _interest(borrowAmount, RATE, CALL_DURATION + 1 days);
+
+        assertEq(strategy.totalDebt(), expectedDebt);
+        assertEq(strategy.rate(), RATE);
+    }
+
+    function test_accrueInterestDoesNotApplyPendingRateAutomatically() public {
+        uint256 borrowAmount = 10_000e18;
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(CALL_DURATION + 1);
+
+        asset.mint(borrower, 1);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), 1);
+        strategy.repay(1);
+        vm.stopPrank();
+
+        assertEq(strategy.rate(), RATE);
+        assertEq(strategy.pendingRate(), NEW_RATE);
+        assertEq(
+            strategy.totalDebt(),
+            borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 1
+        );
+    }
+
+    function test_applyPendingRateRejectsBeforeCallDuration() public {
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(CALL_DURATION - 1);
+
+        vm.prank(management);
+        vm.expectRevert("rate not ready");
+        strategy.applyPendingRate();
+    }
+
+    function test_applyPendingRateUsesOldRateThenNewRateForFutureAccrual()
+        public
+    {
+        uint256 borrowAmount = 10_000e18;
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(CALL_DURATION + 1);
+
+        uint256 debtBeforeApply = borrowAmount +
+            _interest(borrowAmount, RATE, CALL_DURATION + 1);
+
+        vm.prank(management);
+        strategy.applyPendingRate();
+
+        assertEq(strategy.rate(), NEW_RATE);
+        assertEq(strategy.pendingRate(), 0);
+        assertEq(strategy.pendingRateEffectiveTime(), 0);
+        assertEq(strategy.totalDebt(), debtBeforeApply);
+
+        skip(1 days);
+
+        assertEq(
+            strategy.totalDebt(),
+            debtBeforeApply + _interest(debtBeforeApply, NEW_RATE, 1 days)
+        );
+    }
+
+    function test_newScheduleOverwritesPendingRateAndResetsEffectiveTime()
+        public
+    {
+        vm.prank(management);
+        strategy.setRate(NEW_RATE);
+
+        skip(1 days);
+
+        uint256 expectedEffectiveTime = block.timestamp + CALL_DURATION;
+        vm.prank(management);
+        strategy.setRate(SECOND_RATE);
+
+        assertEq(strategy.rate(), RATE);
+        assertEq(strategy.pendingRate(), SECOND_RATE);
+        assertEq(strategy.pendingRateEffectiveTime(), expectedEffectiveTime);
+
+        skip(CALL_DURATION - 1);
+        assertEq(strategy.rate(), RATE);
+
+        skip(1);
+        assertEq(strategy.rate(), RATE);
+        assertEq(strategy.pendingRate(), SECOND_RATE);
     }
 }
 

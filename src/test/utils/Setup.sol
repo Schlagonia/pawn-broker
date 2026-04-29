@@ -47,7 +47,7 @@ contract Setup is Test, IEvents {
 
     uint256 public lltv = 915e15;
     uint256 public targetLtv = 9e17;
-    uint256 public fixedRate = 400;
+    uint256 public rate = 400;
     uint256 public callDuration = 1 weeks;
 
     function setUp() public virtual {
@@ -95,7 +95,7 @@ contract Setup is Test, IEvents {
                     address(collateral),
                     address(collateralOracle),
                     lltv,
-                    fixedRate,
+                    rate,
                     callDuration
                 )
             )

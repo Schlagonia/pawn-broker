@@ -407,7 +407,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(collateralOracle),
             lltv,
-            fixedRate,
+            rate,
             callDuration
         );
     }
@@ -421,7 +421,7 @@ contract ComprehensiveTest is Setup {
             address(0),
             address(collateralOracle),
             lltv,
-            fixedRate,
+            rate,
             callDuration
         );
     }
@@ -435,7 +435,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(0),
             lltv,
-            fixedRate,
+            rate,
             callDuration
         );
     }
@@ -449,7 +449,7 @@ contract ComprehensiveTest is Setup {
             address(asset),
             address(collateralOracle),
             lltv,
-            fixedRate,
+            rate,
             callDuration
         );
     }
@@ -463,7 +463,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(collateralOracle),
             0,
-            fixedRate,
+            rate,
             callDuration
         );
 
@@ -475,7 +475,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(collateralOracle),
             1e18,
-            fixedRate,
+            rate,
             callDuration
         );
 
@@ -487,7 +487,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(collateralOracle),
             2e18,
-            fixedRate,
+            rate,
             callDuration
         );
     }
@@ -501,7 +501,7 @@ contract ComprehensiveTest is Setup {
             address(collateral),
             address(collateralOracle),
             lltv,
-            fixedRate,
+            rate,
             0
         );
     }
@@ -905,7 +905,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedInterest = (borrowAmt * fixedRate) / MAX_BPS;
+        uint256 expectedInterest = (borrowAmt * rate) / MAX_BPS;
 
         airdrop(asset, borrower, expectedInterest);
         vm.startPrank(borrower);
@@ -980,7 +980,7 @@ contract ComprehensiveTest is Setup {
         uint256 debtAfter = strategy.totalDebt();
 
         uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, fixedRate, MAX_BPS),
+            Math.mulDiv(borrowAmt, rate, MAX_BPS),
             1 days,
             365 days
         );
@@ -1000,7 +1000,7 @@ contract ComprehensiveTest is Setup {
         skip(30 days);
 
         uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, fixedRate, MAX_BPS),
+            Math.mulDiv(borrowAmt, rate, MAX_BPS),
             30 days,
             365 days
         );
@@ -1019,7 +1019,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedInterest = (borrowAmt * fixedRate) / MAX_BPS;
+        uint256 expectedInterest = (borrowAmt * rate) / MAX_BPS;
         uint256 totalOwed = strategy.totalDebt();
 
         assertApproxEqAbs(
@@ -1035,9 +1035,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedAfter1Year = borrowAmt +
-            (borrowAmt * fixedRate) /
-            MAX_BPS;
+        uint256 expectedAfter1Year = borrowAmt + (borrowAmt * rate) / MAX_BPS;
         assertApproxEqAbs(
             strategy.totalDebt(),
             expectedAfter1Year,
@@ -1056,7 +1054,7 @@ contract ComprehensiveTest is Setup {
         skip(365 days);
 
         uint256 expectedAfter2Years = expectedAfter1Year +
-            (expectedAfter1Year * fixedRate) /
+            (expectedAfter1Year * rate) /
             MAX_BPS;
         assertApproxEqAbs(
             strategy.totalDebt(),
@@ -1114,7 +1112,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedNewInterest = (debtAfterRepay * fixedRate) / MAX_BPS;
+        uint256 expectedNewInterest = (debtAfterRepay * rate) / MAX_BPS;
         uint256 totalExpected = debtAfterRepay + expectedNewInterest;
 
         assertApproxEqAbs(
@@ -1144,7 +1142,7 @@ contract ComprehensiveTest is Setup {
         skip(365 days);
 
         uint256 expectedInterest = Math.mulDiv(
-            Math.mulDiv(borrowAmt, fixedRate, MAX_BPS),
+            Math.mulDiv(borrowAmt, rate, MAX_BPS),
             365 days,
             365 days
         );
@@ -2473,7 +2471,7 @@ contract ComprehensiveTest is Setup {
 
         skip(365 days);
 
-        uint256 expectedInterest = (borrowAmt * fixedRate) / MAX_BPS;
+        uint256 expectedInterest = (borrowAmt * rate) / MAX_BPS;
 
         // Repay just the interest
         airdrop(asset, borrower, expectedInterest);
