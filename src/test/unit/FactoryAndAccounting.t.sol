@@ -51,6 +51,7 @@ abstract contract LocalSetup is Test {
     address internal user = address(0x500);
     address internal borrower = address(0x600);
     address internal secondBorrower = address(0x700);
+    address internal liquidator = address(0x800);
 
     MockProtocolFeeFactory internal protocolFeeFactory;
     MockERC20 internal asset;
@@ -261,6 +262,129 @@ contract BorrowerRepairTest is LocalSetup {
 
         assertEq(strategy.totalCollateral(), collateralAmount + topUpAmount);
         assertEq(strategy.totalDebt(), borrowAmount);
+    }
+}
+
+contract PausabilityTest is LocalSetup {
+    function _openPosition(uint256 borrowAmount) internal {
+        _allowAndDeposit(user, 100_000e18);
+        _postCollateral(100e18);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+    }
+
+    function test_emergencyAuthorizedCanPauseAndOnlyManagementCanUnpause() public {
+        assertFalse(strategy.paused());
+
+        vm.prank(user);
+        vm.expectRevert("!emergency authorized");
+        strategy.pause();
+
+        vm.prank(emergencyAdmin);
+        strategy.pause();
+
+        assertTrue(strategy.paused());
+
+        vm.prank(emergencyAdmin);
+        vm.expectRevert("!management");
+        strategy.unpause();
+
+        vm.prank(management);
+        strategy.unpause();
+
+        assertFalse(strategy.paused());
+
+        vm.prank(management);
+        strategy.pause();
+
+        assertTrue(strategy.paused());
+    }
+
+    function test_pauseRejectsRepeatedTransitions() public {
+        vm.prank(management);
+        vm.expectRevert("not paused");
+        strategy.unpause();
+
+        vm.prank(emergencyAdmin);
+        strategy.pause();
+
+        vm.prank(emergencyAdmin);
+        vm.expectRevert("paused");
+        strategy.pause();
+    }
+
+    function test_pausedBlocksDepositsWithdraws() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 blockedDepositAmount = 1_000e18;
+
+        _allowAndDeposit(user, depositAmount);
+
+        vm.prank(emergencyAdmin);
+        strategy.pause();
+
+        assertEq(strategy.availableDepositLimit(user), 0);
+        assertEq(strategy.availableWithdrawLimit(user), 0);
+
+        asset.mint(user, blockedDepositAmount);
+        vm.startPrank(user);
+        asset.approve(address(strategy), blockedDepositAmount);
+        vm.expectRevert("ERC4626: deposit more than max");
+        strategy.deposit(blockedDepositAmount, user);
+        vm.expectRevert("ERC4626: withdraw more than max");
+        strategy.withdraw(1e18, user, user);
+        vm.stopPrank();
+    }
+
+    function test_pausedBlocksPositionMutationsAndLiquidation() public {
+        uint256 borrowAmount = 10_000e18;
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.setLiquidator(liquidator, true);
+
+        vm.prank(emergencyAdmin);
+        strategy.pause();
+
+        collateral.mint(borrower, 1e18);
+        asset.mint(borrower, 1e18);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(strategy), 1e18);
+        asset.approve(address(strategy), 1e18);
+        vm.expectRevert("paused");
+        strategy.postCollateral(1e18);
+        vm.expectRevert("paused");
+        strategy.borrow(1e18, borrower);
+        vm.expectRevert("paused");
+        strategy.repay(1e18);
+        vm.expectRevert("paused");
+        strategy.withdrawCollateral(1e18, borrower);
+        vm.stopPrank();
+
+        vm.prank(management);
+        vm.expectRevert("paused");
+        strategy.callDebt(1e18);
+
+        vm.prank(liquidator);
+        vm.expectRevert("paused");
+        strategy.liquidate(1e18, liquidator, bytes(""));
+    }
+
+    function test_managementCanUnpauseAndActivityResumes() public {
+        vm.prank(emergencyAdmin);
+        strategy.pause();
+
+        vm.prank(management);
+        strategy.unpause();
+
+        _allowAndDeposit(user, 10_000e18);
+        _postCollateral(100e18);
+
+        vm.prank(borrower);
+        strategy.borrow(1_000e18, borrower);
+
+        assertEq(strategy.totalDebt(), 1_000e18);
     }
 }
 

@@ -56,6 +56,10 @@ contract FunctionSignatureTest is Setup {
         strategy.setProfitMaxUnlockTime(1);
         vm.expectRevert("!management");
         strategy.setAllowed(user, true);
+        vm.expectRevert("!emergency authorized");
+        strategy.pause();
+        vm.expectRevert("!management");
+        strategy.unpause();
         vm.expectRevert("!management");
         strategy.setRate(1);
         vm.expectRevert("!management");

@@ -26,6 +26,9 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns when the pending rate may be applied, or zero.
     function pendingRateEffectiveTime() external view returns (uint256);
 
+    /// @notice Returns whether borrower, liquidation, and tokenized-strategy activity is paused.
+    function paused() external view returns (bool);
+
     /// @notice Returns the debt-call deadline window in seconds.
     function CALL_DURATION() external view returns (uint256);
 
@@ -34,6 +37,12 @@ interface IPawnBroker is IBaseHealthCheck {
 
     /// @notice Sets whether an address may liquidate unhealthy or overdue debt.
     function setLiquidator(address _liquidator, bool _isAllowed) external;
+
+    /// @notice Pauses borrower, liquidation, and tokenized-strategy activity.
+    function pause() external;
+
+    /// @notice Unpauses borrower, liquidation, and tokenized-strategy activity.
+    function unpause() external;
 
     /// @notice Schedules a new annualized rate in basis points.
     function setRate(uint256 _newRateBps) external;

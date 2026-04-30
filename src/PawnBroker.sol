@@ -29,11 +29,18 @@ contract PawnBroker is BaseHooks {
         uint256 totalCollateral
     );
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
+    event Paused(address indexed caller);
+    event Unpaused(address indexed caller);
     event RateUpdateScheduled(uint256 newRate, uint256 effectiveTime);
     event RateUpdated(uint256 oldRate, uint256 newRate);
 
     modifier onlyBorrower() {
         require(msg.sender == BORROWER, "not borrower");
+        _;
+    }
+
+    modifier whenNotPaused() {
+        require(!paused, "paused");
         _;
     }
 
@@ -56,6 +63,8 @@ contract PawnBroker is BaseHooks {
     uint256 public totalCollateral;
     /// @dev The current borrowable debt ceiling. Called debt is excluded.
     uint256 public maxDebt;
+    /// @dev Whether borrower, liquidation, and tokenized-strategy activity is paused.
+    bool public paused;
     /// @dev The active annualized interest rate charged on debt, in basis points.
     uint256 public rate;
     /// @dev The next annualized rate scheduled to become active.
@@ -116,6 +125,20 @@ contract PawnBroker is BaseHooks {
         emit LiquidatorUpdated(_liquidator, _isAllowed);
     }
 
+    /// @notice Pauses borrower, liquidation, and tokenized-strategy activity.
+    function pause() external onlyEmergencyAuthorized {
+        require(!paused, "paused");
+        paused = true;
+        emit Paused(msg.sender);
+    }
+
+    /// @notice Unpauses borrower, liquidation, and tokenized-strategy activity.
+    function unpause() external onlyManagement {
+        require(paused, "not paused");
+        paused = false;
+        emit Unpaused(msg.sender);
+    }
+
     /// @notice Schedules a new rate after the call-duration delay.
     function setRate(uint256 _newRateBps) external onlyManagement {
         require(_newRateBps <= MAX_BPS, "bad rate");
@@ -149,7 +172,7 @@ contract PawnBroker is BaseHooks {
     ////////////////////////////////////////////////////////////////
 
     /// @notice Posts additional collateral for the borrower position.
-    function postCollateral(uint256 _amount) external onlyBorrower {
+    function postCollateral(uint256 _amount) external onlyBorrower whenNotPaused {
         require(_amount > 0, "zero amount");
 
         _accrueInterest();
@@ -162,7 +185,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Borrows strategy assets against posted collateral.
     /// @param _amount The amount of base asset to borrow.
     /// @param _receiver The address that receives the borrowed assets.
-    function borrow(uint256 _amount, address _receiver) external onlyBorrower {
+    function borrow(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused {
         require(!TokenizedStrategy.isShutdown(), "shutdown");
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
@@ -182,7 +205,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Repays outstanding debt.
     /// @param _amount The requested repayment amount.
     /// @return actualRepaid The amount of debt actually repaid.
-    function repay(uint256 _amount) external onlyBorrower returns (uint256 actualRepaid) {
+    function repay(uint256 _amount) external onlyBorrower whenNotPaused returns (uint256 actualRepaid) {
         require(_amount > 0, "zero amount");
 
         uint256 _currentDebt = _accrueInterest();
@@ -199,7 +222,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Withdraws posted collateral when no debt call is active.
     /// @param _amount The amount of collateral to withdraw.
     /// @param _receiver The address that receives the collateral.
-    function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower {
+    function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused {
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
@@ -219,7 +242,7 @@ contract PawnBroker is BaseHooks {
 
     /// @notice Calls debt and starts the repayment deadline window.
     /// @param _amount The additional amount of debt to call.
-    function callDebt(uint256 _amount) external onlyManagement {
+    function callDebt(uint256 _amount) external onlyManagement whenNotPaused {
         require(_amount > 0, "zero amount");
 
         uint256 _currentDebt = _accrueInterest();
@@ -248,6 +271,7 @@ contract PawnBroker is BaseHooks {
     /// @return collateralSeized The amount of collateral transferred to the receiver.
     function liquidate(uint256 _repayAmount, address _receiver, bytes calldata _data)
         external
+        whenNotPaused
         returns (uint256 actualRepaid, uint256 collateralSeized)
     {
         require(_repayAmount > 0, "zero amount");
@@ -331,6 +355,7 @@ contract PawnBroker is BaseHooks {
 
     /// @notice Returns the deposit limit for an address.
     function availableDepositLimit(address _owner) public view override returns (uint256) {
+        if (paused) return 0;
         if (TokenizedStrategy.isShutdown()) return 0;
         if (allowed[_owner]) return type(uint256).max;
         return 0;
@@ -338,6 +363,7 @@ contract PawnBroker is BaseHooks {
 
     /// @notice Returns the amount of idle base asset currently withdrawable from the strategy.
     function availableWithdrawLimit(address) public view override returns (uint256) {
+        if (paused) return 0;
         return asset.balanceOf(address(this));
     }
 

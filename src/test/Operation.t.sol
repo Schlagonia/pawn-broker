@@ -25,6 +25,7 @@ contract OperationTest is Setup {
         assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
+        assertFalse(strategy.paused());
         assertTrue(strategy.isSolvent());
         assertTrue(strategy.isHealthy());
         assertEq(strategy.currentLtv(), 0);
