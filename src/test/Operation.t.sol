@@ -12,6 +12,7 @@ contract OperationTest is Setup {
         assertEq(strategy.keeper(), keeper);
         assertEq(strategy.BORROWER(), borrower);
         assertEq(strategy.COLLATERAL_ASSET(), address(collateral));
+        assertEq(address(strategy.COOLDOWN_HANDLER()), address(0));
         assertEq(address(strategy.ORACLE()), address(collateralOracle));
         assertEq(strategy.LLTV(), lltv);
         assertEq(strategy.rate(), rate);
@@ -25,6 +26,8 @@ contract OperationTest is Setup {
         assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
+        assertEq(strategy.availableCollateral(), 0);
+        assertEq(strategy.pendingCooldownCollateral(), 0);
         assertTrue(strategy.isSolvent());
         assertTrue(strategy.isHealthy());
         assertEq(strategy.currentLtv(), 0);

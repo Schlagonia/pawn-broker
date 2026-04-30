@@ -367,49 +367,101 @@ contract ComprehensiveTest is Setup {
     function test_constructorRejectsZeroBorrower() public {
         vm.expectRevert("zero borrower");
         new PawnBroker(
-            address(asset), "Test", address(0), address(collateral), address(collateralOracle), lltv, rate, callDuration
+            address(asset),
+            "Test",
+            address(0),
+            address(collateral),
+            address(collateralOracle),
+            lltv,
+            rate,
+            callDuration,
+            address(0)
         );
     }
 
     function test_constructorRejectsZeroCollateral() public {
         vm.expectRevert("zero collateral");
         new PawnBroker(
-            address(asset), "Test", borrower, address(0), address(collateralOracle), lltv, rate, callDuration
+            address(asset),
+            "Test",
+            borrower,
+            address(0),
+            address(collateralOracle),
+            lltv,
+            rate,
+            callDuration,
+            address(0)
         );
     }
 
     function test_constructorRejectsZeroOracle() public {
         vm.expectRevert("zero oracle");
-        new PawnBroker(address(asset), "Test", borrower, address(collateral), address(0), lltv, rate, callDuration);
+        new PawnBroker(
+            address(asset), "Test", borrower, address(collateral), address(0), lltv, rate, callDuration, address(0)
+        );
     }
 
     function test_constructorRejectsSameAssetAndCollateral() public {
         vm.expectRevert("shared asset");
         new PawnBroker(
-            address(asset), "Test", borrower, address(asset), address(collateralOracle), lltv, rate, callDuration
+            address(asset),
+            "Test",
+            borrower,
+            address(asset),
+            address(collateralOracle),
+            lltv,
+            rate,
+            callDuration,
+            address(0)
         );
     }
 
     function test_constructorRejectsInvalidLltv() public {
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 0, rate, callDuration
+            address(asset),
+            "Test",
+            borrower,
+            address(collateral),
+            address(collateralOracle),
+            0,
+            rate,
+            callDuration,
+            address(0)
         );
 
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 1e18, rate, callDuration
+            address(asset),
+            "Test",
+            borrower,
+            address(collateral),
+            address(collateralOracle),
+            1e18,
+            rate,
+            callDuration,
+            address(0)
         );
 
         vm.expectRevert("bad lltv");
         new PawnBroker(
-            address(asset), "Test", borrower, address(collateral), address(collateralOracle), 2e18, rate, callDuration
+            address(asset),
+            "Test",
+            borrower,
+            address(collateral),
+            address(collateralOracle),
+            2e18,
+            rate,
+            callDuration,
+            address(0)
         );
     }
 
     function test_constructorRejectsZeroCallDuration() public {
         vm.expectRevert("zero call duration");
-        new PawnBroker(address(asset), "Test", borrower, address(collateral), address(collateralOracle), lltv, rate, 0);
+        new PawnBroker(
+            address(asset), "Test", borrower, address(collateral), address(collateralOracle), lltv, rate, 0, address(0)
+        );
     }
 
     // ================================================================

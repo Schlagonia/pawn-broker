@@ -3,10 +3,13 @@ pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {TokenizedStrategy} from "@tokenized-strategy/TokenizedStrategy.sol";
 
 import {PawnBrokerFactory} from "../../PawnBrokerFactory.sol";
+import {ICooldownHandler} from "../../interfaces/ICooldownHandler.sol";
 import {IPawnBroker} from "../../interfaces/IPawnBroker.sol";
 import {MockMorphoOracle} from "../mocks/MockMorphoOracle.sol";
 
@@ -36,6 +39,53 @@ contract MockERC20 is ERC20 {
     }
 }
 
+contract MockCooldownHandler is ICooldownHandler {
+    using SafeERC20 for ERC20;
+
+    address public immutable override collateralAsset;
+    address public immutable override asset;
+
+    uint256 public override pendingCollateral;
+    uint256 public nextFinalizedCollateral;
+
+    constructor(address _collateralAsset, address _asset) {
+        collateralAsset = _collateralAsset;
+        asset = _asset;
+    }
+
+    function setNextFinalizedCollateral(uint256 _finalizedCollateral) external {
+        nextFinalizedCollateral = _finalizedCollateral;
+    }
+
+    function cooldown(uint256 _collateralAmount) external override returns (uint256 queuedCollateral) {
+        pendingCollateral += _collateralAmount;
+        return _collateralAmount;
+    }
+
+    function claim(address _receiver) external override returns (uint256 claimedAssets, uint256 finalizedCollateral) {
+        claimedAssets = ERC20(asset).balanceOf(address(this));
+        finalizedCollateral = nextFinalizedCollateral == 0 ? pendingCollateral : nextFinalizedCollateral;
+        finalizedCollateral = Math.min(finalizedCollateral, pendingCollateral);
+
+        pendingCollateral -= finalizedCollateral;
+        nextFinalizedCollateral = 0;
+
+        if (claimedAssets > 0) {
+            ERC20(asset).safeTransfer(_receiver, claimedAssets);
+        }
+    }
+
+    function cancel(uint256 _collateralAmount) external override returns (uint256 returnedCollateral) {
+        if (_collateralAmount == type(uint256).max) _collateralAmount = pendingCollateral;
+        returnedCollateral = Math.min(_collateralAmount, pendingCollateral);
+        pendingCollateral -= returnedCollateral;
+
+        if (returnedCollateral > 0) {
+            ERC20(collateralAsset).safeTransfer(msg.sender, returnedCollateral);
+        }
+    }
+}
+
 abstract contract LocalSetup is Test {
     address internal constant TOKENIZED_STRATEGY = 0xD377919FA87120584B21279a491F82D5265A139c;
 
@@ -51,6 +101,7 @@ abstract contract LocalSetup is Test {
     address internal user = address(0x500);
     address internal borrower = address(0x600);
     address internal secondBorrower = address(0x700);
+    address internal liquidator = address(0x800);
 
     MockProtocolFeeFactory internal protocolFeeFactory;
     MockERC20 internal asset;
@@ -171,6 +222,333 @@ contract FactoryRegistryTest is LocalSetup {
             ),
             duplicateStrategy
         );
+    }
+}
+
+abstract contract CooldownSetup is LocalSetup {
+    MockCooldownHandler internal cooldownHandler;
+
+    function setUp() public virtual override {
+        super.setUp();
+
+        cooldownHandler = new MockCooldownHandler(address(collateral), address(asset));
+        strategy = IHealthCheckStrategy(
+            pawnBrokerFactory.newPawnBroker(
+                address(asset),
+                "Cooldown PawnBroker",
+                borrower,
+                address(collateral),
+                address(oracle),
+                LLTV,
+                RATE,
+                CALL_DURATION,
+                address(cooldownHandler)
+            )
+        );
+
+        vm.prank(management);
+        strategy.acceptManagement();
+    }
+
+    function _openPosition(uint256 depositAmount, uint256 collateralAmount, uint256 borrowAmount) internal {
+        _allowAndDeposit(user, depositAmount);
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+    }
+}
+
+contract CooldownFactoryTest is LocalSetup {
+    function test_newPawnBrokerWithCooldownUsesSeparateRegistryKey() public {
+        MockCooldownHandler cooldownHandler = new MockCooldownHandler(address(collateral), address(asset));
+
+        address cooldownStrategy = pawnBrokerFactory.newPawnBroker(
+            address(asset),
+            "Cooldown PawnBroker",
+            borrower,
+            address(collateral),
+            address(oracle),
+            LLTV,
+            RATE,
+            CALL_DURATION,
+            address(cooldownHandler)
+        );
+
+        assertEq(address(strategy.COOLDOWN_HANDLER()), address(0));
+        assertEq(address(IPawnBroker(cooldownStrategy).COOLDOWN_HANDLER()), address(cooldownHandler));
+        assertEq(
+            pawnBrokerFactory.pawnBrokerFor(
+                address(asset), borrower, address(collateral), address(oracle), LLTV, RATE, CALL_DURATION
+            ),
+            address(strategy)
+        );
+        assertEq(
+            pawnBrokerFactory.pawnBrokerFor(
+                address(asset),
+                borrower,
+                address(collateral),
+                address(oracle),
+                LLTV,
+                RATE,
+                CALL_DURATION,
+                address(cooldownHandler)
+            ),
+            cooldownStrategy
+        );
+    }
+
+    function test_newPawnBrokerRejectsMismatchedCooldownCollateral() public {
+        MockERC20 otherCollateral = new MockERC20("Other Collateral", "OCOL", 18);
+        MockCooldownHandler badHandler = new MockCooldownHandler(address(otherCollateral), address(asset));
+
+        vm.expectRevert("bad cooldown collateral");
+        pawnBrokerFactory.newPawnBroker(
+            address(asset),
+            "Bad Cooldown PawnBroker",
+            borrower,
+            address(collateral),
+            address(oracle),
+            LLTV,
+            RATE,
+            CALL_DURATION,
+            address(badHandler)
+        );
+    }
+
+    function test_newPawnBrokerRejectsMismatchedCooldownAsset() public {
+        MockERC20 otherAsset = new MockERC20("Other Asset", "OAST", 18);
+        MockCooldownHandler badHandler = new MockCooldownHandler(address(collateral), address(otherAsset));
+
+        vm.expectRevert("bad cooldown asset");
+        pawnBrokerFactory.newPawnBroker(
+            address(asset),
+            "Bad Cooldown PawnBroker",
+            borrower,
+            address(collateral),
+            address(oracle),
+            LLTV,
+            RATE,
+            CALL_DURATION,
+            address(badHandler)
+        );
+    }
+}
+
+contract CooldownAccountingTest is CooldownSetup {
+    function test_onlyBorrowerManagementOrLiquidatorCanUseCooldown() public {
+        vm.prank(secondBorrower);
+        vm.expectRevert("not cooldown operator");
+        strategy.initiateCooldown(1);
+
+        vm.prank(secondBorrower);
+        vm.expectRevert("not cooldown operator");
+        strategy.cancelCooldown(1);
+
+        vm.prank(secondBorrower);
+        vm.expectRevert("not cooldown operator");
+        strategy.claimCooldown();
+    }
+
+    function test_initiateCooldownKeepsTotalCollateralAndReducesAvailable() public {
+        uint256 collateralAmount = 10e18;
+        uint256 cooldownAmount = 4e18;
+
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        uint256 queuedCollateral = strategy.initiateCooldown(cooldownAmount);
+
+        assertEq(queuedCollateral, cooldownAmount);
+        assertEq(strategy.totalCollateral(), collateralAmount);
+        assertEq(strategy.availableCollateral(), collateralAmount - cooldownAmount);
+        assertEq(strategy.pendingCooldownCollateral(), cooldownAmount);
+        assertEq(collateral.balanceOf(address(cooldownHandler)), cooldownAmount);
+    }
+
+    function test_withdrawCannotUseCoolingCollateral() public {
+        uint256 collateralAmount = 10e18;
+        uint256 cooldownAmount = 8e18;
+
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.initiateCooldown(cooldownAmount);
+
+        vm.prank(borrower);
+        vm.expectRevert("collateral cooling down");
+        strategy.withdrawCollateral(3e18, borrower);
+
+        vm.prank(borrower);
+        strategy.withdrawCollateral(2e18, borrower);
+
+        assertEq(strategy.totalCollateral(), cooldownAmount);
+        assertEq(strategy.availableCollateral(), 0);
+    }
+
+    function test_cancelCooldownReturnsCollateralWithoutChangingTotalCollateral() public {
+        uint256 collateralAmount = 10e18;
+        uint256 cooldownAmount = 4e18;
+        uint256 cancelAmount = 2e18;
+
+        _postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.initiateCooldown(cooldownAmount);
+
+        vm.prank(management);
+        uint256 returnedCollateral = strategy.cancelCooldown(cancelAmount);
+
+        assertEq(returnedCollateral, cancelAmount);
+        assertEq(strategy.totalCollateral(), collateralAmount);
+        assertEq(strategy.availableCollateral(), collateralAmount - cooldownAmount + cancelAmount);
+        assertEq(strategy.pendingCooldownCollateral(), cooldownAmount - cancelAmount);
+    }
+
+    function test_liquidationOnlySeizesAvailableCollateral() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+        uint256 cooldownAmount = 9e18;
+
+        _openPosition(depositAmount, collateralAmount, borrowAmount);
+
+        vm.prank(borrower);
+        strategy.initiateCooldown(cooldownAmount);
+
+        oracle.setPrice(500e36);
+
+        vm.prank(management);
+        strategy.setLiquidator(liquidator, true);
+
+        asset.mint(liquidator, borrowAmount);
+        vm.startPrank(liquidator);
+        asset.approve(address(strategy), borrowAmount);
+        (uint256 actualRepaid, uint256 collateralSeized) = strategy.liquidate(borrowAmount, liquidator, bytes(""));
+        vm.stopPrank();
+
+        assertEq(actualRepaid, 500e18);
+        assertEq(collateralSeized, 1e18);
+        assertEq(strategy.totalCollateral(), cooldownAmount);
+        assertEq(strategy.availableCollateral(), 0);
+    }
+
+    function test_claimCooldownRepaysDebtAndReducesCollateral() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+        uint256 cooldownAmount = 4e18;
+        uint256 finalizedCollateral = 2e18;
+        uint256 claimedAssets = 5_000e18;
+
+        _openPosition(depositAmount, collateralAmount, borrowAmount);
+
+        vm.prank(borrower);
+        strategy.initiateCooldown(cooldownAmount);
+
+        cooldownHandler.setNextFinalizedCollateral(finalizedCollateral);
+        asset.mint(address(cooldownHandler), claimedAssets);
+
+        vm.prank(management);
+        (uint256 actualClaimedAssets, uint256 actualFinalizedCollateral, uint256 debtRepaid) = strategy.claimCooldown();
+
+        assertEq(actualClaimedAssets, claimedAssets);
+        assertEq(actualFinalizedCollateral, finalizedCollateral);
+        assertEq(debtRepaid, claimedAssets);
+        assertEq(strategy.totalDebt(), borrowAmount - claimedAssets);
+        assertEq(strategy.totalCollateral(), collateralAmount - finalizedCollateral);
+        assertEq(strategy.pendingCooldownCollateral(), cooldownAmount - finalizedCollateral);
+        assertEq(asset.balanceOf(address(strategy)), claimedAssets);
+    }
+
+    function test_claimCooldownSatisfiesCalledDebt() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+        uint256 callAmount = 3_000e18;
+        uint256 claimedAssets = 4_000e18;
+
+        _openPosition(depositAmount, collateralAmount, borrowAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.prank(borrower);
+        strategy.initiateCooldown(2e18);
+
+        cooldownHandler.setNextFinalizedCollateral(2e18);
+        asset.mint(address(cooldownHandler), claimedAssets);
+
+        vm.prank(liquidator);
+        vm.expectRevert("not cooldown operator");
+        strategy.claimCooldown();
+
+        vm.prank(management);
+        (,, uint256 debtRepaid) = strategy.claimCooldown();
+
+        assertEq(debtRepaid, claimedAssets);
+        assertEq(strategy.calledDebt(), 0);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
+        assertEq(strategy.callDeadline(), 0);
+        assertEq(strategy.totalDebt(), borrowAmount - claimedAssets);
+    }
+
+    function test_managementAndLiquidatorCannotInitiateCooldownWhileHealthyWithoutCall() public {
+        _postCollateral(10e18);
+
+        vm.prank(management);
+        strategy.setLiquidator(liquidator, true);
+
+        vm.prank(management);
+        vm.expectRevert("cooldown not allowed");
+        strategy.initiateCooldown(1e18);
+
+        vm.prank(liquidator);
+        vm.expectRevert("cooldown not allowed");
+        strategy.initiateCooldown(1e18);
+    }
+
+    function test_managementCanInitiateCooldownAfterOverdueDebtCall() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+        uint256 callAmount = 1_000e18;
+
+        _openPosition(depositAmount, collateralAmount, borrowAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.prank(management);
+        vm.expectRevert("cooldown not allowed");
+        strategy.initiateCooldown(1e18);
+
+        skip(CALL_DURATION + 1);
+
+        vm.prank(management);
+        uint256 queuedCollateral = strategy.initiateCooldown(1e18);
+
+        assertEq(queuedCollateral, 1e18);
+        assertEq(strategy.pendingCooldownCollateral(), 1e18);
+    }
+
+    function test_approvedLiquidatorCanInitiateCooldownWhenUnhealthy() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 borrowAmount = 10_000e18;
+
+        _openPosition(depositAmount, collateralAmount, borrowAmount);
+
+        vm.prank(management);
+        strategy.setLiquidator(liquidator, true);
+
+        oracle.setPrice(500e36);
+
+        vm.prank(liquidator);
+        uint256 queuedCollateral = strategy.initiateCooldown(1e18);
+
+        assertEq(queuedCollateral, 1e18);
+        assertEq(strategy.pendingCooldownCollateral(), 1e18);
     }
 }
 

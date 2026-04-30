@@ -3,6 +3,7 @@ pragma solidity ^0.8.23;
 
 import {IBaseHealthCheck} from "@periphery/Bases/HealthCheck/IBaseHealthCheck.sol";
 import {IMorphoOracle} from "./IMorphoOracle.sol";
+import {ICooldownHandler} from "./ICooldownHandler.sol";
 
 interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns the borrower address for this pawn broker.
@@ -10,6 +11,9 @@ interface IPawnBroker is IBaseHealthCheck {
 
     /// @notice Returns the collateral token address for this pawn broker.
     function COLLATERAL_ASSET() external view returns (address);
+
+    /// @notice Returns the optional cooldown handler for async collateral unwinds.
+    function COOLDOWN_HANDLER() external view returns (ICooldownHandler);
 
     /// @notice Returns the oracle used to value collateral.
     function ORACLE() external view returns (IMorphoOracle);
@@ -56,6 +60,17 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Withdraws posted collateral when no debt call is active.
     function withdrawCollateral(uint256 _amount, address _receiver) external;
 
+    /// @notice Queues posted collateral through the optional cooldown handler.
+    function initiateCooldown(uint256 _amount) external returns (uint256 queuedCollateral);
+
+    /// @notice Claims cooled assets and applies them to outstanding debt.
+    function claimCooldown()
+        external
+        returns (uint256 claimedAssets, uint256 finalizedCollateral, uint256 debtRepaid);
+
+    /// @notice Cancels queued collateral when the handler supports cancellation.
+    function cancelCooldown(uint256 _amount) external returns (uint256 returnedCollateral);
+
     /// @notice Calls debt and starts the repayment deadline window.
     function callDebt(uint256 _amount) external;
 
@@ -90,6 +105,12 @@ interface IPawnBroker is IBaseHealthCheck {
 
     /// @notice Returns the current loan-to-value ratio scaled by `1e18`.
     function currentLtv() external view returns (uint256);
+
+    /// @notice Returns posted collateral currently held by this broker and transferable now.
+    function availableCollateral() external view returns (uint256);
+
+    /// @notice Returns collateral currently queued through the cooldown handler.
+    function pendingCooldownCollateral() external view returns (uint256);
 
     function lastAccrualTime() external view returns (uint256);
 
