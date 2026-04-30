@@ -46,22 +46,69 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external virtual returns (address) {
-        bytes32 _key = deploymentKey(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration);
+        return _newPawnBroker(
+            _asset, _name, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, address(0)
+        );
+    }
 
-        IPawnBroker _newPawnBroker = IPawnBroker(
-            address(new PawnBroker(_asset, _name, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration))
+    /// @notice Deploys a new pawn broker with an optional collateral cooldown handler.
+    function newPawnBroker(
+        address _asset,
+        string calldata _name,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _rateBps,
+        uint256 _callDuration,
+        address _cooldownHandler
+    ) external virtual returns (address) {
+        return _newPawnBroker(
+            _asset, _name, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, _cooldownHandler
+        );
+    }
+
+    function _newPawnBroker(
+        address _asset,
+        string calldata _name,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _rateBps,
+        uint256 _callDuration,
+        address _cooldownHandler
+    ) internal returns (address) {
+        IPawnBroker _deployedPawnBroker = IPawnBroker(
+            address(
+                new PawnBroker(
+                    _asset,
+                    _name,
+                    _borrower,
+                    _collateralAsset,
+                    _oracle,
+                    _lltv,
+                    _rateBps,
+                    _callDuration,
+                    _cooldownHandler
+                )
+            )
         );
 
-        _newPawnBroker.setPerformanceFeeRecipient(performanceFeeRecipient);
-        _newPawnBroker.setKeeper(keeper);
-        _newPawnBroker.setPendingManagement(management);
-        _newPawnBroker.setEmergencyAdmin(EMERGENCY_ADMIN);
+        bytes32 _key = deploymentKey(
+            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, _cooldownHandler
+        );
 
-        pawnBrokersByKey[_key].add(address(_newPawnBroker));
-        allPawnBrokers.add(address(_newPawnBroker));
+        _deployedPawnBroker.setPerformanceFeeRecipient(performanceFeeRecipient);
+        _deployedPawnBroker.setKeeper(keeper);
+        _deployedPawnBroker.setPendingManagement(management);
+        _deployedPawnBroker.setEmergencyAdmin(EMERGENCY_ADMIN);
 
-        emit NewPawnBroker(address(_newPawnBroker), _asset, _borrower, _collateralAsset);
-        return address(_newPawnBroker);
+        pawnBrokersByKey[_key].add(address(_deployedPawnBroker));
+        allPawnBrokers.add(address(_deployedPawnBroker));
+
+        emit NewPawnBroker(address(_deployedPawnBroker), _asset, _borrower, _collateralAsset);
+        return address(_deployedPawnBroker);
     }
 
     /// @notice Returns the registry key for a pawn broker configuration.
@@ -74,7 +121,23 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) public pure returns (bytes32) {
-        return keccak256(abi.encode(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration));
+        return deploymentKey(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, address(0));
+    }
+
+    /// @notice Returns the registry key for a pawn broker configuration with cooldown handler.
+    function deploymentKey(
+        address _asset,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _rateBps,
+        uint256 _callDuration,
+        address _cooldownHandler
+    ) public pure returns (bytes32) {
+        return keccak256(
+            abi.encode(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, _cooldownHandler)
+        );
     }
 
     /// @notice Returns the most recently deployed pawn broker for a configuration, if one exists.
@@ -87,8 +150,22 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address) {
+        return pawnBrokerFor(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, address(0));
+    }
+
+    /// @notice Returns the most recently deployed pawn broker for a configuration with cooldown handler.
+    function pawnBrokerFor(
+        address _asset,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _rateBps,
+        uint256 _callDuration,
+        address _cooldownHandler
+    ) public view returns (address) {
         EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[deploymentKey(
-            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
+            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, _cooldownHandler
         )];
         uint256 _length = _pawnBrokers.length();
         if (_length == 0) return address(0);
@@ -105,8 +182,22 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address[] memory) {
+        return pawnBrokersFor(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, address(0));
+    }
+
+    /// @notice Returns every pawn broker deployed for a configuration with cooldown handler.
+    function pawnBrokersFor(
+        address _asset,
+        address _borrower,
+        address _collateralAsset,
+        address _oracle,
+        uint256 _lltv,
+        uint256 _rateBps,
+        uint256 _callDuration,
+        address _cooldownHandler
+    ) public view returns (address[] memory) {
         return pawnBrokersByKey[deploymentKey(
-            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
+            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration, _cooldownHandler
         )].values();
     }
 

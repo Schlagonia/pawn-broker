@@ -34,6 +34,9 @@ contract FunctionSignatureTest is Setup {
         assertEq(strategy.calledDebt(), 0);
         assertEq(strategy.repaidCalledDebt(), 0);
         assertEq(strategy.callDeadline(), 0);
+        assertEq(address(strategy.COOLDOWN_HANDLER()), address(0));
+        assertEq(strategy.availableCollateral(), 0);
+        assertEq(strategy.pendingCooldownCollateral(), 0);
         assertEq(strategy.totalDebt(), 0);
         assertTrue(strategy.isSolvent());
         assertTrue(strategy.isHealthy());
@@ -64,6 +67,12 @@ contract FunctionSignatureTest is Setup {
         strategy.callDebt(1);
         vm.expectRevert("not borrower");
         strategy.postCollateral(1);
+        vm.expectRevert("not cooldown operator");
+        strategy.initiateCooldown(1);
+        vm.expectRevert("not cooldown operator");
+        strategy.cancelCooldown(1);
+        vm.expectRevert("not cooldown operator");
+        strategy.claimCooldown();
         vm.stopPrank();
 
         vm.startPrank(strategy.management());

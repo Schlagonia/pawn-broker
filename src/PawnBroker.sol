@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 import {ILiquidator} from "./interfaces/ILiquidator.sol";
+import {ICooldownHandler} from "./interfaces/ICooldownHandler.sol";
 
 /// @notice Single-borrower pawn broker secured by posted collateral.
 contract PawnBroker is BaseHooks {
@@ -31,9 +32,22 @@ contract PawnBroker is BaseHooks {
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
     event RateUpdateScheduled(uint256 newRate, uint256 effectiveTime);
     event RateUpdated(uint256 oldRate, uint256 newRate);
+    event CooldownInitiated(address indexed caller, uint256 amount, uint256 queuedCollateral);
+    event CooldownClaimed(
+        address indexed caller, uint256 claimedAssets, uint256 finalizedCollateral, uint256 debtRepaid
+    );
+    event CooldownCancelled(address indexed caller, uint256 returnedCollateral);
 
     modifier onlyBorrower() {
         require(msg.sender == BORROWER, "not borrower");
+        _;
+    }
+
+    modifier onlyCooldownOperator() {
+        require(
+            msg.sender == BORROWER || msg.sender == TokenizedStrategy.management() || liquidators[msg.sender],
+            "not cooldown operator"
+        );
         _;
     }
 
@@ -45,6 +59,8 @@ contract PawnBroker is BaseHooks {
     address public immutable BORROWER;
     /// @dev The collateral token backing the borrower position.
     address public immutable COLLATERAL_ASSET;
+    /// @dev Optional adapter for async collateral unwind flows.
+    ICooldownHandler public immutable COOLDOWN_HANDLER;
     /// @dev The oracle used to convert collateral into base-asset value.
     IMorphoOracle public immutable ORACLE;
     /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
@@ -86,7 +102,8 @@ contract PawnBroker is BaseHooks {
         address _oracle,
         uint256 _lltv,
         uint256 _rateBps,
-        uint256 _callDuration
+        uint256 _callDuration,
+        address _cooldownHandlerAddress
     ) BaseHealthCheck(_asset, _name) {
         require(_borrower != address(0), "zero borrower");
         require(_collateralAsset != address(0), "zero collateral");
@@ -98,6 +115,7 @@ contract PawnBroker is BaseHooks {
 
         BORROWER = _borrower;
         COLLATERAL_ASSET = _collateralAsset;
+        COOLDOWN_HANDLER = ICooldownHandler(_cooldownHandlerAddress);
         ORACLE = IMorphoOracle(_oracle);
         LLTV = _lltv;
         rate = _rateBps;
@@ -206,6 +224,7 @@ contract PawnBroker is BaseHooks {
 
         uint256 _totalCollateral = totalCollateral;
         require(_amount <= _totalCollateral, "insufficient collateral");
+        require(_amount <= availableCollateral(), "collateral cooling down");
 
         uint256 _currentDebt = _accrueInterest();
 
@@ -215,6 +234,57 @@ contract PawnBroker is BaseHooks {
         ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
 
         emit CollateralWithdrawn(msg.sender, _receiver, _amount, _totalCollateral);
+    }
+
+    /// @notice Queues posted collateral through the optional cooldown handler.
+    function initiateCooldown(uint256 _amount) external onlyCooldownOperator returns (uint256 queuedCollateral) {
+        uint256 _cooldownAmount = Math.min(_amount, availableCollateral());
+        require(_cooldownAmount > 0, "no collateral available");
+
+        uint256 _currentDebt = _accrueInterest();
+        if (msg.sender != BORROWER) {
+            require(_isCallOverdue() || !_isSolventAt(_currentDebt, totalCollateral), "cooldown not allowed");
+        }
+
+        ERC20(COLLATERAL_ASSET).safeTransfer(address(COOLDOWN_HANDLER), _cooldownAmount);
+        queuedCollateral = COOLDOWN_HANDLER.cooldown(_cooldownAmount);
+        require(queuedCollateral > 0, "nothing queued");
+
+        emit CooldownInitiated(msg.sender, _cooldownAmount, queuedCollateral);
+    }
+
+    /// @notice Claims cooled collateral assets back to this broker and repays debt with them.
+    function claimCooldown()
+        external
+        onlyCooldownOperator
+        returns (uint256 claimedAssets, uint256 finalizedCollateral, uint256 debtRepaid)
+    {
+        _accrueInterest();
+
+        (claimedAssets, finalizedCollateral) = COOLDOWN_HANDLER.claim(address(this));
+        require(finalizedCollateral <= totalCollateral, "bad finalized collateral");
+
+        if (finalizedCollateral > 0) {
+            totalCollateral -= finalizedCollateral;
+        }
+
+        debtRepaid = Math.min(claimedAssets, debtAmount);
+        if (debtRepaid > 0) {
+            _applyRepayment(debtRepaid);
+            emit Repaid(msg.sender, debtRepaid, debtAmount, calledDebt);
+        }
+
+        emit CooldownClaimed(msg.sender, claimedAssets, finalizedCollateral, debtRepaid);
+    }
+
+    /// @notice Cancels queued collateral when the handler supports cancellation.
+    function cancelCooldown(uint256 _amount) external onlyCooldownOperator returns (uint256 returnedCollateral) {
+        _accrueInterest();
+
+        returnedCollateral = COOLDOWN_HANDLER.cancel(_amount);
+        require(returnedCollateral > 0, "nothing returned");
+
+        emit CooldownCancelled(msg.sender, returnedCollateral);
     }
 
     /// @notice Calls debt and starts the repayment deadline window.
@@ -257,24 +327,26 @@ contract PawnBroker is BaseHooks {
         uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");
 
-        uint256 _currentCollateral = totalCollateral;
-        bool _callOverdue = _isCallOverdue();
-        bool _solvent = _isSolventAt(_currentDebt, _currentCollateral);
-        require(_callOverdue || !_solvent, "not liquidatable");
+        {
+            uint256 _currentCollateral = totalCollateral;
+            bool _callOverdue = _isCallOverdue();
+            bool _solvent = _isSolventAt(_currentDebt, _currentCollateral);
+            require(_callOverdue || !_solvent, "not liquidatable");
 
-        uint256 _maxRepay = _currentDebt;
-        // If just overdue but still solvent, repay the called debt.
-        if (_solvent) _maxRepay = calledDebt;
+            uint256 _maxRepay = _currentDebt;
+            // If just overdue but still solvent, repay the called debt.
+            if (_solvent) _maxRepay = calledDebt;
 
-        uint256 _positionCollateralValue = _collateralValue(_currentCollateral);
-        _maxRepay = Math.min(_maxRepay, _positionCollateralValue);
-        actualRepaid = Math.min(_repayAmount, _maxRepay);
-        require(actualRepaid > 0, "repay too small");
+            uint256 _seizableCollateral = Math.min(_currentCollateral, availableCollateral());
+            _maxRepay = Math.min(_maxRepay, _collateralValue(_seizableCollateral));
+            actualRepaid = Math.min(_repayAmount, _maxRepay);
+            require(actualRepaid > 0, "repay too small");
 
-        collateralSeized = _loanToCollateral(actualRepaid);
-        require(collateralSeized > 0, "seize too small");
-        if (collateralSeized > _currentCollateral) {
-            collateralSeized = _currentCollateral;
+            collateralSeized = _loanToCollateral(actualRepaid);
+            require(collateralSeized > 0, "seize too small");
+            if (collateralSeized > _seizableCollateral) {
+                collateralSeized = _seizableCollateral;
+            }
         }
 
         totalCollateral -= collateralSeized;
@@ -323,6 +395,16 @@ contract PawnBroker is BaseHooks {
         if (_positionCollateralValue == 0) return type(uint256).max;
 
         return Math.mulDiv(_currentDebt, LLTV_SCALE, _positionCollateralValue);
+    }
+
+    /// @notice Returns posted collateral currently held by this broker and transferable now.
+    function availableCollateral() public view returns (uint256) {
+        return ERC20(COLLATERAL_ASSET).balanceOf(address(this));
+    }
+
+    /// @notice Returns collateral currently queued through the cooldown handler.
+    function pendingCooldownCollateral() public view returns (uint256) {
+        return COOLDOWN_HANDLER.pendingCollateral();
     }
 
     ////////////////////////////////////////////////////////////////
