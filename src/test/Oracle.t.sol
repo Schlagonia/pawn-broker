@@ -40,7 +40,9 @@ contract OracleTest is Setup {
 
         setLiquidator(liquidator, true);
         uint256 debtBeforeLiquidation = strategy.totalDebt();
-        uint256 expectedCollateralSeized = Math.mulDiv(liquidateAmount, 1e36, collateralOracle.price());
+        uint256 baseCollateralSeized = Math.mulDiv(liquidateAmount, 1e36, collateralOracle.price());
+        uint256 collateralBonus = Math.mulDiv(baseCollateralSeized, strategy.liquidationBonusBps(), MAX_BPS);
+        uint256 expectedCollateralSeized = baseCollateralSeized + collateralBonus;
 
         airdrop(asset, liquidator, liquidateAmount);
         vm.startPrank(liquidator);

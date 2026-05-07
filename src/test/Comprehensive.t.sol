@@ -72,6 +72,8 @@ contract ComprehensiveTest is Setup {
     );
     event UpdateAllowed(address indexed owner, bool isAllowed);
     event LiquidatorUpdated(address indexed liquidator, bool isAllowed);
+    event LiquidationBonusUpdateScheduled(uint256 newBonusBps, uint256 effectiveTime);
+    event LiquidationBonusUpdated(uint256 oldBonusBps, uint256 newBonusBps);
 
     function setUp() public override {
         super.setUp();
@@ -103,6 +105,12 @@ contract ComprehensiveTest is Setup {
         strategy.borrow(borrowAmt, borrower);
         // Accrue enough interest to push past LLTV
         skip(365 days * 3);
+    }
+
+    function _expectedCollateralSeized(uint256 repayAmount) internal view returns (uint256) {
+        uint256 baseCollateralSeized = Math.mulDiv(repayAmount, 1e36, collateralOracle.price());
+        uint256 collateralBonus = Math.mulDiv(baseCollateralSeized, strategy.liquidationBonusBps(), MAX_BPS);
+        return baseCollateralSeized + collateralBonus;
     }
 
     // ================================================================
@@ -1222,8 +1230,7 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount);
         skip(callDuration + 1);
 
-        uint256 price = collateralOracle.price();
-        uint256 expectedCollateral = Math.mulDiv(callAmount, 1e36, price);
+        uint256 expectedCollateral = _expectedCollateralSeized(callAmount);
 
         setLiquidator(liquidator, true);
         airdrop(asset, liquidator, callAmount);
@@ -2409,8 +2416,7 @@ contract ComprehensiveTest is Setup {
         strategy.callDebt(callAmount);
         skip(callDuration + 1);
 
-        uint256 price = collateralOracle.price();
-        uint256 expectedSeized = Math.mulDiv(callAmount, 1e36, price);
+        uint256 expectedSeized = _expectedCollateralSeized(callAmount);
         uint256 expectedDebtAfter = strategy.totalDebt() - callAmount;
         uint256 expectedCollateralAfter = collateralAmt - expectedSeized;
 

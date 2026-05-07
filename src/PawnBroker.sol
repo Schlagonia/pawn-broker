@@ -34,6 +34,8 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     event Unpaused(address indexed caller);
     event RateUpdateScheduled(uint256 newRate, uint256 effectiveTime);
     event RateUpdated(uint256 oldRate, uint256 newRate);
+    event LiquidationBonusUpdateScheduled(uint256 newBonusBps, uint256 effectiveTime);
+    event LiquidationBonusUpdated(uint256 oldBonusBps, uint256 newBonusBps);
 
     modifier onlyBorrower() {
         require(msg.sender == BORROWER, "not borrower");
@@ -48,6 +50,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     uint256 public constant LLTV_SCALE = 1e18;
     uint256 public constant ORACLE_PRICE_SCALE = 1e36;
     uint256 public constant SECONDS_PER_YEAR = 365 days;
+    uint256 public constant MAX_LIQUIDATION_BONUS_BPS = 1_000;
 
     /// @dev The only address allowed to post collateral, borrow, repay, and pull collateral.
     address public immutable BORROWER;
@@ -72,6 +75,12 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     uint256 public pendingRate;
     /// @dev The timestamp when `pendingRate` may be applied, or zero.
     uint256 public pendingRateEffectiveTime;
+    /// @dev The extra collateral seized during liquidation, in basis points.
+    uint256 public liquidationBonusBps;
+    /// @dev The next liquidation bonus scheduled to become active.
+    uint256 public pendingLiquidationBonusBps;
+    /// @dev The timestamp when `pendingLiquidationBonusBps` may be applied, or zero.
+    uint256 public pendingLiquidationBonusEffectiveTime;
     /// @dev The stored compounded debt balance after the last accrual update.
     uint256 internal debtAmount;
     /// @dev The timestamp of the last interest accrual.
@@ -111,6 +120,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         ORACLE = IMorphoOracle(_oracle);
         LLTV = _lltv;
         rate = _rateBps;
+        liquidationBonusBps = 100; // 1%
         CALL_DURATION = _callDuration;
         lastAccrualTime = block.timestamp;
     }
@@ -166,6 +176,32 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         pendingRateEffectiveTime = 0;
 
         emit RateUpdated(_oldRate, _newRate);
+    }
+
+    /// @notice Schedules a new liquidation bonus after the call-duration delay.
+    function setLiquidationBonus(uint256 _newBonusBps) external onlyManagement {
+        require(_newBonusBps <= MAX_LIQUIDATION_BONUS_BPS, "bad bonus");
+
+        uint256 _effectiveTime = block.timestamp + CALL_DURATION;
+        pendingLiquidationBonusBps = _newBonusBps;
+        pendingLiquidationBonusEffectiveTime = _effectiveTime;
+
+        emit LiquidationBonusUpdateScheduled(_newBonusBps, _effectiveTime);
+    }
+
+    /// @notice Applies the pending liquidation bonus once its delay has elapsed.
+    function applyPendingLiquidationBonus() external onlyManagement {
+        uint256 _effectiveTime = pendingLiquidationBonusEffectiveTime;
+        require(_effectiveTime != 0 && block.timestamp >= _effectiveTime, "bonus not ready");
+
+        uint256 _oldBonusBps = liquidationBonusBps;
+        uint256 _newBonusBps = pendingLiquidationBonusBps;
+
+        liquidationBonusBps = _newBonusBps;
+        pendingLiquidationBonusBps = 0;
+        pendingLiquidationBonusEffectiveTime = 0;
+
+        emit LiquidationBonusUpdated(_oldBonusBps, _newBonusBps);
     }
 
     ////////////////////////////////////////////////////////////////
@@ -295,7 +331,8 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         actualRepaid = Math.min(_repayAmount, _maxRepay);
         require(actualRepaid > 0, "repay too small");
 
-        collateralSeized = Math.min(_loanToCollateral(actualRepaid), _currentCollateral);
+        collateralSeized = Math.mulDiv(_loanToCollateral(actualRepaid), MAX_BPS + liquidationBonusBps, MAX_BPS);
+        collateralSeized = Math.min(collateralSeized, _currentCollateral);
         require(collateralSeized > 0, "seize too small");
 
         totalCollateral -= collateralSeized;

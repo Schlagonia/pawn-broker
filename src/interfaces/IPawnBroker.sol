@@ -26,6 +26,15 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns when the pending rate may be applied, or zero.
     function pendingRateEffectiveTime() external view returns (uint256);
 
+    /// @notice Returns the active liquidation bonus in basis points.
+    function liquidationBonusBps() external view returns (uint256);
+
+    /// @notice Returns the next liquidation bonus scheduled to become active.
+    function pendingLiquidationBonusBps() external view returns (uint256);
+
+    /// @notice Returns when the pending liquidation bonus may be applied, or zero.
+    function pendingLiquidationBonusEffectiveTime() external view returns (uint256);
+
     /// @notice Returns whether borrower, liquidation, and tokenized-strategy activity is paused.
     function paused() external view returns (bool);
 
@@ -49,6 +58,12 @@ interface IPawnBroker is IBaseHealthCheck {
 
     /// @notice Applies the pending rate once its delay has elapsed.
     function applyPendingRate() external;
+
+    /// @notice Schedules a new liquidation bonus in basis points.
+    function setLiquidationBonus(uint256 _newBonusBps) external;
+
+    /// @notice Applies the pending liquidation bonus once its delay has elapsed.
+    function applyPendingLiquidationBonus() external;
 
     /// @notice Returns whether an address may liquidate unhealthy or overdue debt.
     function liquidators(address _liquidator) external view returns (bool);

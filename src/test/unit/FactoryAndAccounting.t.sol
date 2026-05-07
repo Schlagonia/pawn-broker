@@ -3,6 +3,7 @@ pragma solidity ^0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {TokenizedStrategy} from "@tokenized-strategy/TokenizedStrategy.sol";
 
@@ -391,8 +392,15 @@ contract PausabilityTest is LocalSetup {
 contract RateManagementTest is LocalSetup {
     uint256 internal constant NEW_RATE = 1_000;
     uint256 internal constant SECOND_RATE = 2_000;
+    uint256 internal constant DEFAULT_LIQUIDATION_BONUS = 100;
+    uint256 internal constant NEW_LIQUIDATION_BONUS = 250;
+    uint256 internal constant SECOND_LIQUIDATION_BONUS = 500;
+    uint256 internal constant MAX_LIQUIDATION_BONUS = 1_000;
     uint256 internal constant SECONDS_PER_YEAR = 365 days;
     uint256 internal constant MAX_BPS = 10_000;
+
+    event LiquidationBonusUpdateScheduled(uint256 newBonusBps, uint256 effectiveTime);
+    event LiquidationBonusUpdated(uint256 oldBonusBps, uint256 newBonusBps);
 
     function _openPosition(uint256 borrowAmount) internal {
         _allowAndDeposit(user, 100_000e18);
@@ -405,6 +413,30 @@ contract RateManagementTest is LocalSetup {
     function _interest(uint256 debt, uint256 rate, uint256 elapsed) internal pure returns (uint256) {
         uint256 annualInterest = (debt * rate) / MAX_BPS;
         return (annualInterest * elapsed) / SECONDS_PER_YEAR;
+    }
+
+    function _expectedCollateralSeized(uint256 repayAmount, uint256 bonusBps) internal view returns (uint256) {
+        uint256 baseCollateralSeized = Math.mulDiv(repayAmount, 1e36, oracle.price());
+        uint256 collateralBonus = Math.mulDiv(baseCollateralSeized, bonusBps, MAX_BPS);
+        return baseCollateralSeized + collateralBonus;
+    }
+
+    function _liquidateAfterCall(uint256 borrowAmount, uint256 callAmount)
+        internal
+        returns (uint256 actualRepaid, uint256 collateralSeized)
+    {
+        _openPosition(borrowAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        skip(CALL_DURATION + 1);
+
+        asset.mint(management, callAmount);
+        vm.startPrank(management);
+        asset.approve(address(strategy), callAmount);
+        (actualRepaid, collateralSeized) = strategy.liquidate(callAmount, management, bytes(""));
+        vm.stopPrank();
     }
 
     function test_managementCanScheduleRateWithCallDurationDelay() public {
@@ -551,6 +583,119 @@ contract RateManagementTest is LocalSetup {
         skip(1);
         assertEq(strategy.rate(), RATE);
         assertEq(strategy.pendingRate(), SECOND_RATE);
+    }
+
+    function test_defaultLiquidationBonusIsOnePercent() public {
+        assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusBps(), 0);
+        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
+    }
+
+    function test_managementCanScheduleLiquidationBonusWithCallDurationDelay() public {
+        uint256 expectedEffectiveTime = block.timestamp + CALL_DURATION;
+
+        vm.expectEmit(false, false, false, true);
+        emit LiquidationBonusUpdateScheduled(NEW_LIQUIDATION_BONUS, expectedEffectiveTime);
+
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusBps(), NEW_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), expectedEffectiveTime);
+
+        skip(CALL_DURATION);
+
+        assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusBps(), NEW_LIQUIDATION_BONUS);
+    }
+
+    function test_nonManagementCannotSetLiquidationBonus() public {
+        vm.prank(borrower);
+        vm.expectRevert("!management");
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+    }
+
+    function test_setLiquidationBonusRejectsAboveMax() public {
+        vm.prank(management);
+        vm.expectRevert("bad bonus");
+        strategy.setLiquidationBonus(MAX_LIQUIDATION_BONUS + 1);
+    }
+
+    function test_applyPendingLiquidationBonusRejectsBeforeCallDuration() public {
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        skip(CALL_DURATION - 1);
+
+        vm.prank(management);
+        vm.expectRevert("bonus not ready");
+        strategy.applyPendingLiquidationBonus();
+    }
+
+    function test_applyPendingLiquidationBonusUsesPendingBonusAndClearsSchedule() public {
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        skip(CALL_DURATION + 1);
+
+        vm.expectEmit(false, false, false, true);
+        emit LiquidationBonusUpdated(DEFAULT_LIQUIDATION_BONUS, NEW_LIQUIDATION_BONUS);
+
+        vm.prank(management);
+        strategy.applyPendingLiquidationBonus();
+
+        assertEq(strategy.liquidationBonusBps(), NEW_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusBps(), 0);
+        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
+    }
+
+    function test_newScheduleOverwritesPendingLiquidationBonusAndResetsEffectiveTime() public {
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        skip(1 days);
+
+        uint256 expectedEffectiveTime = block.timestamp + CALL_DURATION;
+        vm.prank(management);
+        strategy.setLiquidationBonus(SECOND_LIQUIDATION_BONUS);
+
+        assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusBps(), SECOND_LIQUIDATION_BONUS);
+        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), expectedEffectiveTime);
+    }
+
+    function test_pendingLiquidationBonusDoesNotAffectLiquidationBeforeApply() public {
+        uint256 borrowAmount = 10_000e18;
+        uint256 callAmount = 2_000e18;
+
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        skip(CALL_DURATION + 1);
+
+        (uint256 actualRepaid, uint256 collateralSeized) = _liquidateAfterCall(borrowAmount, callAmount);
+
+        assertEq(actualRepaid, callAmount);
+        assertEq(collateralSeized, _expectedCollateralSeized(callAmount, DEFAULT_LIQUIDATION_BONUS));
+    }
+
+    function test_appliedLiquidationBonusAffectsLiquidation() public {
+        uint256 borrowAmount = 10_000e18;
+        uint256 callAmount = 2_000e18;
+
+        vm.prank(management);
+        strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
+
+        skip(CALL_DURATION + 1);
+
+        vm.prank(management);
+        strategy.applyPendingLiquidationBonus();
+
+        (uint256 actualRepaid, uint256 collateralSeized) = _liquidateAfterCall(borrowAmount, callAmount);
+
+        assertEq(actualRepaid, callAmount);
+        assertEq(collateralSeized, _expectedCollateralSeized(callAmount, NEW_LIQUIDATION_BONUS));
     }
 }
 

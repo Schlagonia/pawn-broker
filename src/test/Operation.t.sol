@@ -41,6 +41,9 @@ contract OperationTest is Setup {
         assertEq(strategy.rate(), rate);
         assertEq(strategy.pendingRate(), 0);
         assertEq(strategy.pendingRateEffectiveTime(), 0);
+        assertEq(strategy.liquidationBonusBps(), 100);
+        assertEq(strategy.pendingLiquidationBonusBps(), 0);
+        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
         assertEq(strategy.CALL_DURATION(), callDuration);
         assertFalse(strategy.liquidators(liquidator));
         assertEq(strategy.totalCollateral(), 0);
