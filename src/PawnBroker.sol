@@ -3,13 +3,14 @@ pragma solidity ^0.8.23;
 
 import {BaseHooks, ERC20, BaseHealthCheck} from "@periphery/Bases/Hooks/BaseHooks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
 import {ILiquidator} from "./interfaces/ILiquidator.sol";
 
 /// @notice Single-borrower pawn broker secured by posted collateral.
-contract PawnBroker is BaseHooks {
+contract PawnBroker is BaseHooks, ReentrancyGuard {
     using SafeERC20 for ERC20;
 
     event CollateralPosted(address indexed caller, uint256 amount, uint256 totalCollateral);
@@ -172,7 +173,7 @@ contract PawnBroker is BaseHooks {
     ////////////////////////////////////////////////////////////////
 
     /// @notice Posts additional collateral for the borrower position.
-    function postCollateral(uint256 _amount) external onlyBorrower whenNotPaused {
+    function postCollateral(uint256 _amount) external onlyBorrower whenNotPaused nonReentrant {
         require(_amount > 0, "zero amount");
 
         _accrueInterest();
@@ -185,7 +186,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Borrows strategy assets against posted collateral.
     /// @param _amount The amount of base asset to borrow.
     /// @param _receiver The address that receives the borrowed assets.
-    function borrow(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused {
+    function borrow(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused nonReentrant {
         require(!TokenizedStrategy.isShutdown(), "shutdown");
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
@@ -194,7 +195,7 @@ contract PawnBroker is BaseHooks {
         uint256 _currentDebt = _accrueInterest();
         uint256 _newDebt = _currentDebt + _amount;
         require(_newDebt <= maxDebt, "max debt");
-        require(_isSolventAt(_newDebt, totalCollateral) && !_isCallOverdue(), "position unhealthy");
+        require(_isSolventAt(_newDebt, totalCollateral), "position unhealthy");
         debtAmount = _newDebt;
 
         asset.safeTransfer(_receiver, _amount);
@@ -205,7 +206,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Repays outstanding debt.
     /// @param _amount The requested repayment amount.
     /// @return actualRepaid The amount of debt actually repaid.
-    function repay(uint256 _amount) external onlyBorrower whenNotPaused returns (uint256 actualRepaid) {
+    function repay(uint256 _amount) external onlyBorrower whenNotPaused nonReentrant returns (uint256 actualRepaid) {
         require(_amount > 0, "zero amount");
 
         uint256 _currentDebt = _accrueInterest();
@@ -222,7 +223,7 @@ contract PawnBroker is BaseHooks {
     /// @notice Withdraws posted collateral when no debt call is active.
     /// @param _amount The amount of collateral to withdraw.
     /// @param _receiver The address that receives the collateral.
-    function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused {
+    function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused nonReentrant {
         require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
@@ -234,7 +235,7 @@ contract PawnBroker is BaseHooks {
 
         _totalCollateral -= _amount;
         totalCollateral = _totalCollateral;
-        require(_isSolventAt(_currentDebt, _totalCollateral) && !_isCallOverdue(), "position unhealthy");
+        require(_isSolventAt(_currentDebt, _totalCollateral), "position unhealthy");
         ERC20(COLLATERAL_ASSET).safeTransfer(_receiver, _amount);
 
         emit CollateralWithdrawn(msg.sender, _receiver, _amount, _totalCollateral);
@@ -272,6 +273,7 @@ contract PawnBroker is BaseHooks {
     function liquidate(uint256 _repayAmount, address _receiver, bytes calldata _data)
         external
         whenNotPaused
+        nonReentrant
         returns (uint256 actualRepaid, uint256 collateralSeized)
     {
         require(_repayAmount > 0, "zero amount");
@@ -282,24 +284,19 @@ contract PawnBroker is BaseHooks {
         require(_currentDebt > 0, "no debt");
 
         uint256 _currentCollateral = totalCollateral;
-        bool _callOverdue = _isCallOverdue();
         bool _solvent = _isSolventAt(_currentDebt, _currentCollateral);
-        require(_callOverdue || !_solvent, "not liquidatable");
+        require(_isCallOverdue() || !_solvent, "not liquidatable");
 
         uint256 _maxRepay = _currentDebt;
         // If just overdue but still solvent, repay the called debt.
         if (_solvent) _maxRepay = calledDebt;
 
-        uint256 _positionCollateralValue = _collateralValue(_currentCollateral);
-        _maxRepay = Math.min(_maxRepay, _positionCollateralValue);
+        _maxRepay = Math.min(_maxRepay, _collateralValue(_currentCollateral));
         actualRepaid = Math.min(_repayAmount, _maxRepay);
         require(actualRepaid > 0, "repay too small");
 
-        collateralSeized = _loanToCollateral(actualRepaid);
+        collateralSeized = Math.min(_loanToCollateral(actualRepaid), _currentCollateral);
         require(collateralSeized > 0, "seize too small");
-        if (collateralSeized > _currentCollateral) {
-            collateralSeized = _currentCollateral;
-        }
 
         totalCollateral -= collateralSeized;
         _applyRepayment(actualRepaid);
@@ -479,7 +476,7 @@ contract PawnBroker is BaseHooks {
     }
 
     /// @notice Rescues unrelated tokens accidentally sent to the strategy.
-    function rescue(address _token) external onlyManagement {
+    function rescue(address _token) external onlyManagement nonReentrant {
         require(_token != address(asset), "cannot rescue asset");
         require(_token != COLLATERAL_ASSET, "cannot rescue collateral");
         require(_token != address(this), "cannot rescue self");

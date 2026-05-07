@@ -1,7 +1,31 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.23;
 
-import {Setup} from "./utils/Setup.sol";
+import {Setup, ERC20} from "./utils/Setup.sol";
+import {ILiquidator} from "../interfaces/ILiquidator.sol";
+import {IPawnBroker} from "../interfaces/IPawnBroker.sol";
+
+contract ReentrantLiquidator is ILiquidator {
+    IPawnBroker public immutable strategy;
+    ERC20 public immutable asset;
+
+    constructor(IPawnBroker _strategy) {
+        strategy = _strategy;
+        asset = ERC20(_strategy.asset());
+    }
+
+    function execute(uint256 _repayAmount) external {
+        asset.approve(address(strategy), type(uint256).max);
+        strategy.liquidate(_repayAmount, address(this), bytes("reenter"));
+    }
+
+    function liquidateCallback(address, address, uint256, uint256 _amountNeeded, bytes calldata _data) external {
+        require(msg.sender == address(strategy), "not strategy");
+        if (_data.length != 0) {
+            strategy.liquidate(_amountNeeded, address(this), bytes(""));
+        }
+    }
+}
 
 contract OperationTest is Setup {
     function test_setupStrategyOK() public {
@@ -162,5 +186,30 @@ contract OperationTest is Setup {
         assertEq(actualRepaid, callAmount);
         assertLt(strategy.totalCollateral(), collateralAmount);
         assertLt(strategy.totalDebt(), borrowAmount);
+    }
+
+    function test_liquidationCallbackCannotReenter() public {
+        uint256 liquidity = defaultLiquidityAmount();
+        uint256 collateralAmount = defaultCollateralAmount();
+        uint256 borrowAmount = defaultBorrowAmount(collateralAmount);
+        uint256 callAmount = borrowAmount / 5;
+
+        mintAndDepositIntoStrategy(strategy, user, liquidity);
+        postCollateral(collateralAmount);
+
+        vm.prank(borrower);
+        strategy.borrow(borrowAmount, borrower);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        skip(callDuration + 1);
+
+        ReentrantLiquidator reentrantLiquidator = new ReentrantLiquidator(strategy);
+        setLiquidator(address(reentrantLiquidator), true);
+        airdrop(asset, address(reentrantLiquidator), borrowAmount);
+
+        vm.expectRevert("ReentrancyGuard: reentrant call");
+        reentrantLiquidator.execute(callAmount);
     }
 }
