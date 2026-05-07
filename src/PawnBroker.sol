@@ -47,10 +47,15 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         _;
     }
 
-    uint256 public constant LLTV_SCALE = 1e18;
-    uint256 public constant ORACLE_PRICE_SCALE = 1e36;
-    uint256 public constant SECONDS_PER_YEAR = 365 days;
-    uint256 public constant MAX_LIQUIDATION_BONUS_BPS = 1_000;
+    struct PendingUpdate {
+        uint256 value;
+        uint256 effectiveTime;
+    }
+
+    uint256 internal constant LLTV_SCALE = 1e18;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
+    uint256 internal constant SECONDS_PER_YEAR = 365 days;
+    uint256 internal constant MAX_LIQUIDATION_BONUS_BPS = 1_000;
 
     /// @dev The only address allowed to post collateral, borrow, repay, and pull collateral.
     address public immutable BORROWER;
@@ -63,35 +68,35 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @dev The time window the borrower has to satisfy an active debt call.
     uint256 public immutable CALL_DURATION;
 
-    /// @dev The amount of collateral currently posted by the borrower.
-    uint256 public totalCollateral;
-    /// @dev The current borrowable debt ceiling. Called debt is excluded.
-    uint256 public maxDebt;
     /// @dev Whether borrower, liquidation, and tokenized-strategy activity is paused.
     bool public paused;
-    /// @dev The active annualized interest rate charged on debt, in basis points.
-    uint256 public rate;
-    /// @dev The next annualized rate scheduled to become active.
-    uint256 public pendingRate;
-    /// @dev The timestamp when `pendingRate` may be applied, or zero.
-    uint256 public pendingRateEffectiveTime;
-    /// @dev The extra collateral seized during liquidation, in basis points.
-    uint256 public liquidationBonusBps;
-    /// @dev The next liquidation bonus scheduled to become active.
-    uint256 public pendingLiquidationBonusBps;
-    /// @dev The timestamp when `pendingLiquidationBonusBps` may be applied, or zero.
-    uint256 public pendingLiquidationBonusEffectiveTime;
+
+    /// @dev The current borrowable debt ceiling. Called debt is excluded.
+    uint256 public maxDebt;
     /// @dev The stored compounded debt balance after the last accrual update.
     uint256 internal debtAmount;
     /// @dev The timestamp of the last interest accrual.
     uint256 public lastAccrualTime;
+    /// @dev The amount of collateral currently posted by the borrower.
+    uint256 public totalCollateral;
+
     /// @dev The amount of debt currently under an active repayment call.
     /// Fully called positions keep accruing into this bucket until the call is cleared.
     uint256 public calledDebt;
-    /// @dev The called debt already repaid and still sitting idle in the strategy.
-    uint256 public repaidCalledDebt;
     /// @dev The deadline for the current debt call, or zero when no call is active.
     uint256 public callDeadline;
+    /// @dev The called debt already repaid and still sitting idle in the strategy.
+    uint256 public repaidCalledDebt;
+
+    /// @dev The active annualized interest rate charged on debt, in basis points.
+    uint256 public rate;
+    /// @dev The next annualized rate update scheduled to become active.
+    PendingUpdate internal pendingRateUpdate;
+
+    /// @dev The extra collateral seized during liquidation, in basis points.
+    uint256 public liquidationBonusBps;
+    /// @dev The next liquidation bonus update scheduled to become active.
+    PendingUpdate internal pendingLiquidationBonusUpdate;
 
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) public liquidators;
@@ -155,51 +160,54 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         require(_newRateBps <= MAX_BPS, "bad rate");
 
         uint256 _effectiveTime = block.timestamp + CALL_DURATION;
-        pendingRate = _newRateBps;
-        pendingRateEffectiveTime = _effectiveTime;
+        pendingRateUpdate = PendingUpdate({value: _newRateBps, effectiveTime: _effectiveTime});
 
         emit RateUpdateScheduled(_newRateBps, _effectiveTime);
     }
 
     /// @notice Applies the pending rate once its delay has elapsed.
     function applyPendingRate() external onlyManagement {
-        uint256 _effectiveTime = pendingRateEffectiveTime;
-        require(_effectiveTime != 0 && block.timestamp >= _effectiveTime, "rate not ready");
+        PendingUpdate memory _pendingRateUpdate = pendingRateUpdate;
+        require(
+            _pendingRateUpdate.effectiveTime != 0 && block.timestamp >= _pendingRateUpdate.effectiveTime,
+            "rate not ready"
+        );
 
         _accrueInterest();
 
         uint256 _oldRate = rate;
-        uint256 _newRate = pendingRate;
+        uint256 _newRate = _pendingRateUpdate.value;
 
         rate = _newRate;
-        pendingRate = 0;
-        pendingRateEffectiveTime = 0;
+        delete pendingRateUpdate;
 
         emit RateUpdated(_oldRate, _newRate);
     }
 
     /// @notice Schedules a new liquidation bonus after the call-duration delay.
     function setLiquidationBonus(uint256 _newBonusBps) external onlyManagement {
-        require(_newBonusBps <= MAX_LIQUIDATION_BONUS_BPS, "bad bonus");
+        require(_newBonusBps <= MAX_LIQUIDATION_BONUS_BPS || TokenizedStrategy.isShutdown(), "bad bonus");
 
         uint256 _effectiveTime = block.timestamp + CALL_DURATION;
-        pendingLiquidationBonusBps = _newBonusBps;
-        pendingLiquidationBonusEffectiveTime = _effectiveTime;
+        pendingLiquidationBonusUpdate = PendingUpdate({value: _newBonusBps, effectiveTime: _effectiveTime});
 
         emit LiquidationBonusUpdateScheduled(_newBonusBps, _effectiveTime);
     }
 
     /// @notice Applies the pending liquidation bonus once its delay has elapsed.
     function applyPendingLiquidationBonus() external onlyManagement {
-        uint256 _effectiveTime = pendingLiquidationBonusEffectiveTime;
-        require(_effectiveTime != 0 && block.timestamp >= _effectiveTime, "bonus not ready");
+        PendingUpdate memory _pendingLiquidationBonusUpdate = pendingLiquidationBonusUpdate;
+        require(
+            _pendingLiquidationBonusUpdate.effectiveTime != 0
+                && block.timestamp >= _pendingLiquidationBonusUpdate.effectiveTime,
+            "bonus not ready"
+        );
 
         uint256 _oldBonusBps = liquidationBonusBps;
-        uint256 _newBonusBps = pendingLiquidationBonusBps;
+        uint256 _newBonusBps = _pendingLiquidationBonusUpdate.value;
 
         liquidationBonusBps = _newBonusBps;
-        pendingLiquidationBonusBps = 0;
-        pendingLiquidationBonusEffectiveTime = 0;
+        delete pendingLiquidationBonusUpdate;
 
         emit LiquidationBonusUpdated(_oldBonusBps, _newBonusBps);
     }
@@ -360,6 +368,26 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @notice Returns current debt including accrued but unapplied interest.
     function totalDebt() public view returns (uint256) {
         return debtAmount + _previewInterest();
+    }
+
+    /// @notice Returns the next annualized rate scheduled to become active.
+    function pendingRate() public view returns (uint256) {
+        return pendingRateUpdate.value;
+    }
+
+    /// @notice Returns when the pending rate may be applied, or zero.
+    function pendingRateEffectiveTime() public view returns (uint256) {
+        return pendingRateUpdate.effectiveTime;
+    }
+
+    /// @notice Returns the next liquidation bonus scheduled to become active.
+    function pendingLiquidationBonusBps() public view returns (uint256) {
+        return pendingLiquidationBonusUpdate.value;
+    }
+
+    /// @notice Returns when the pending liquidation bonus may be applied, or zero.
+    function pendingLiquidationBonusEffectiveTime() public view returns (uint256) {
+        return pendingLiquidationBonusUpdate.effectiveTime;
     }
 
     /// @notice Returns whether the current position is within the configured LLTV.
