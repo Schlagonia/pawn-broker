@@ -91,12 +91,12 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @dev The active annualized interest rate charged on debt, in basis points.
     uint256 public rate;
     /// @dev The next annualized rate update scheduled to become active.
-    PendingUpdate internal pendingRateUpdate;
+    PendingUpdate public pendingRateUpdate;
 
     /// @dev The extra collateral seized during liquidation, in basis points.
     uint256 public liquidationBonusBps;
     /// @dev The next liquidation bonus update scheduled to become active.
-    PendingUpdate internal pendingLiquidationBonusUpdate;
+    PendingUpdate public pendingLiquidationBonusUpdate;
 
     /// @dev Addresses allowed to liquidate unhealthy or overdue positions.
     mapping(address => bool) public liquidators;
@@ -368,26 +368,6 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @notice Returns current debt including accrued but unapplied interest.
     function totalDebt() public view returns (uint256) {
         return debtAmount + _previewInterest();
-    }
-
-    /// @notice Returns the next annualized rate scheduled to become active.
-    function pendingRate() public view returns (uint256) {
-        return pendingRateUpdate.value;
-    }
-
-    /// @notice Returns when the pending rate may be applied, or zero.
-    function pendingRateEffectiveTime() public view returns (uint256) {
-        return pendingRateUpdate.effectiveTime;
-    }
-
-    /// @notice Returns the next liquidation bonus scheduled to become active.
-    function pendingLiquidationBonusBps() public view returns (uint256) {
-        return pendingLiquidationBonusUpdate.value;
-    }
-
-    /// @notice Returns when the pending liquidation bonus may be applied, or zero.
-    function pendingLiquidationBonusEffectiveTime() public view returns (uint256) {
-        return pendingLiquidationBonusUpdate.effectiveTime;
     }
 
     /// @notice Returns whether the current position is within the configured LLTV.

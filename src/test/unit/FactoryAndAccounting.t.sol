@@ -439,6 +439,18 @@ contract RateManagementTest is LocalSetup {
         vm.stopPrank();
     }
 
+    function _assertPendingRate(uint256 expectedValue, uint256 expectedEffectiveTime) internal view {
+        (uint256 value, uint256 effectiveTime) = strategy.pendingRateUpdate();
+        assertEq(value, expectedValue);
+        assertEq(effectiveTime, expectedEffectiveTime);
+    }
+
+    function _assertPendingLiquidationBonus(uint256 expectedValue, uint256 expectedEffectiveTime) internal view {
+        (uint256 value, uint256 effectiveTime) = strategy.pendingLiquidationBonusUpdate();
+        assertEq(value, expectedValue);
+        assertEq(effectiveTime, expectedEffectiveTime);
+    }
+
     function test_managementCanScheduleRateWithCallDurationDelay() public {
         uint256 expectedEffectiveTime = block.timestamp + CALL_DURATION;
 
@@ -446,13 +458,12 @@ contract RateManagementTest is LocalSetup {
         strategy.setRate(NEW_RATE);
 
         assertEq(strategy.rate(), RATE);
-        assertEq(strategy.pendingRate(), NEW_RATE);
-        assertEq(strategy.pendingRateEffectiveTime(), expectedEffectiveTime);
+        _assertPendingRate(NEW_RATE, expectedEffectiveTime);
 
         skip(CALL_DURATION);
 
         assertEq(strategy.rate(), RATE);
-        assertEq(strategy.pendingRate(), NEW_RATE);
+        _assertPendingRate(NEW_RATE, expectedEffectiveTime);
     }
 
     function test_nonManagementCannotSetRate() public {
@@ -524,7 +535,8 @@ contract RateManagementTest is LocalSetup {
         vm.stopPrank();
 
         assertEq(strategy.rate(), RATE);
-        assertEq(strategy.pendingRate(), NEW_RATE);
+        (uint256 pendingRate,) = strategy.pendingRateUpdate();
+        assertEq(pendingRate, NEW_RATE);
         assertEq(strategy.totalDebt(), borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 1);
     }
 
@@ -554,8 +566,7 @@ contract RateManagementTest is LocalSetup {
         strategy.applyPendingRate();
 
         assertEq(strategy.rate(), NEW_RATE);
-        assertEq(strategy.pendingRate(), 0);
-        assertEq(strategy.pendingRateEffectiveTime(), 0);
+        _assertPendingRate(0, 0);
         assertEq(strategy.totalDebt(), debtBeforeApply);
 
         skip(1 days);
@@ -574,21 +585,19 @@ contract RateManagementTest is LocalSetup {
         strategy.setRate(SECOND_RATE);
 
         assertEq(strategy.rate(), RATE);
-        assertEq(strategy.pendingRate(), SECOND_RATE);
-        assertEq(strategy.pendingRateEffectiveTime(), expectedEffectiveTime);
+        _assertPendingRate(SECOND_RATE, expectedEffectiveTime);
 
         skip(CALL_DURATION - 1);
         assertEq(strategy.rate(), RATE);
 
         skip(1);
         assertEq(strategy.rate(), RATE);
-        assertEq(strategy.pendingRate(), SECOND_RATE);
+        _assertPendingRate(SECOND_RATE, expectedEffectiveTime);
     }
 
     function test_defaultLiquidationBonusIsOnePercent() public {
         assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusBps(), 0);
-        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
+        _assertPendingLiquidationBonus(0, 0);
     }
 
     function test_managementCanScheduleLiquidationBonusWithCallDurationDelay() public {
@@ -601,13 +610,12 @@ contract RateManagementTest is LocalSetup {
         strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
 
         assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusBps(), NEW_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), expectedEffectiveTime);
+        _assertPendingLiquidationBonus(NEW_LIQUIDATION_BONUS, expectedEffectiveTime);
 
         skip(CALL_DURATION);
 
         assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusBps(), NEW_LIQUIDATION_BONUS);
+        _assertPendingLiquidationBonus(NEW_LIQUIDATION_BONUS, expectedEffectiveTime);
     }
 
     function test_nonManagementCannotSetLiquidationBonus() public {
@@ -646,8 +654,7 @@ contract RateManagementTest is LocalSetup {
         strategy.applyPendingLiquidationBonus();
 
         assertEq(strategy.liquidationBonusBps(), NEW_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusBps(), 0);
-        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
+        _assertPendingLiquidationBonus(0, 0);
     }
 
     function test_newScheduleOverwritesPendingLiquidationBonusAndResetsEffectiveTime() public {
@@ -661,8 +668,7 @@ contract RateManagementTest is LocalSetup {
         strategy.setLiquidationBonus(SECOND_LIQUIDATION_BONUS);
 
         assertEq(strategy.liquidationBonusBps(), DEFAULT_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusBps(), SECOND_LIQUIDATION_BONUS);
-        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), expectedEffectiveTime);
+        _assertPendingLiquidationBonus(SECOND_LIQUIDATION_BONUS, expectedEffectiveTime);
     }
 
     function test_pendingLiquidationBonusDoesNotAffectLiquidationBeforeApply() public {

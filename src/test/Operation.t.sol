@@ -39,11 +39,14 @@ contract OperationTest is Setup {
         assertEq(address(strategy.ORACLE()), address(collateralOracle));
         assertEq(strategy.LLTV(), lltv);
         assertEq(strategy.rate(), rate);
-        assertEq(strategy.pendingRate(), 0);
-        assertEq(strategy.pendingRateEffectiveTime(), 0);
+        (uint256 pendingRate, uint256 pendingRateEffectiveTime) = strategy.pendingRateUpdate();
+        assertEq(pendingRate, 0);
+        assertEq(pendingRateEffectiveTime, 0);
         assertEq(strategy.liquidationBonusBps(), 100);
-        assertEq(strategy.pendingLiquidationBonusBps(), 0);
-        assertEq(strategy.pendingLiquidationBonusEffectiveTime(), 0);
+        (uint256 pendingLiquidationBonusBps, uint256 pendingLiquidationBonusEffectiveTime) =
+            strategy.pendingLiquidationBonusUpdate();
+        assertEq(pendingLiquidationBonusBps, 0);
+        assertEq(pendingLiquidationBonusEffectiveTime, 0);
         assertEq(strategy.CALL_DURATION(), callDuration);
         assertFalse(strategy.liquidators(liquidator));
         assertEq(strategy.totalCollateral(), 0);

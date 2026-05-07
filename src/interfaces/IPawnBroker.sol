@@ -20,20 +20,14 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Returns the annualized rate in basis points.
     function rate() external view returns (uint256);
 
-    /// @notice Returns the next rate scheduled to become active.
-    function pendingRate() external view returns (uint256);
-
-    /// @notice Returns when the pending rate may be applied, or zero.
-    function pendingRateEffectiveTime() external view returns (uint256);
+    /// @notice Returns the next rate and activation timestamp scheduled to become active.
+    function pendingRateUpdate() external view returns (uint256 value, uint256 effectiveTime);
 
     /// @notice Returns the active liquidation bonus in basis points.
     function liquidationBonusBps() external view returns (uint256);
 
-    /// @notice Returns the next liquidation bonus scheduled to become active.
-    function pendingLiquidationBonusBps() external view returns (uint256);
-
-    /// @notice Returns when the pending liquidation bonus may be applied, or zero.
-    function pendingLiquidationBonusEffectiveTime() external view returns (uint256);
+    /// @notice Returns the next liquidation bonus and activation timestamp scheduled to become active.
+    function pendingLiquidationBonusUpdate() external view returns (uint256 value, uint256 effectiveTime);
 
     /// @notice Returns whether borrower, liquidation, and tokenized-strategy activity is paused.
     function paused() external view returns (bool);
