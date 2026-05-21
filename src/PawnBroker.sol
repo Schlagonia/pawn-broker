@@ -56,12 +56,13 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
     uint256 internal constant SECONDS_PER_YEAR = 365 days;
     uint256 internal constant MAX_LIQUIDATION_BONUS_BPS = 1_000;
+    uint256 internal constant DUST = 100;
 
     /// @dev The only address allowed to post collateral, borrow, repay, and pull collateral.
     address public immutable BORROWER;
     /// @dev The collateral token backing the borrower position.
     address public immutable COLLATERAL_ASSET;
-    /// @dev The oracle used to convert collateral into base-asset value.
+    /// @dev The oracle used to convert collateral into the loan asset.
     IMorphoOracle public immutable ORACLE;
     /// @dev The maximum loan-to-value ratio allowed for the position, scaled by `1e18`.
     uint256 public immutable LLTV;
@@ -218,7 +219,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
 
     /// @notice Posts additional collateral for the borrower position.
     function postCollateral(uint256 _amount) external onlyBorrower whenNotPaused nonReentrant {
-        require(_amount > 0, "zero amount");
+        require(_amount >= DUST, "below dust");
 
         _accrueInterest();
         ERC20(COLLATERAL_ASSET).safeTransferFrom(msg.sender, address(this), _amount);
@@ -232,9 +233,9 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @param _receiver The address that receives the borrowed assets.
     function borrow(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused nonReentrant {
         require(!TokenizedStrategy.isShutdown(), "shutdown");
-        require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
+        require(_amount >= DUST, "below dust");
 
         uint256 _currentDebt = _accrueInterest();
         uint256 _newDebt = _currentDebt + _amount;
@@ -251,7 +252,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @param _amount The requested repayment amount.
     /// @return actualRepaid The amount of debt actually repaid.
     function repay(uint256 _amount) external onlyBorrower whenNotPaused nonReentrant returns (uint256 actualRepaid) {
-        require(_amount > 0, "zero amount");
+        require(_amount >= DUST, "below dust");
 
         uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");
@@ -268,9 +269,9 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @param _amount The amount of collateral to withdraw.
     /// @param _receiver The address that receives the collateral.
     function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused nonReentrant {
-        require(_amount > 0, "zero amount");
         require(_receiver != address(0), "zero receiver");
         require(callDeadline == 0, "debt called");
+        require(_amount >= DUST, "below dust");
 
         uint256 _totalCollateral = totalCollateral;
         require(_amount <= _totalCollateral, "insufficient collateral");
@@ -335,7 +336,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         // If just overdue but still solvent, repay the called debt.
         if (_solvent) _maxRepay = calledDebt;
 
-        _maxRepay = Math.min(_maxRepay, _collateralValue(_currentCollateral));
+        _maxRepay = Math.min(_maxRepay, _collateralToLoan(_currentCollateral));
         actualRepaid = Math.min(_repayAmount, _maxRepay);
         require(actualRepaid > 0, "repay too small");
 
@@ -385,10 +386,10 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         uint256 _currentDebt = totalDebt();
         if (_currentDebt == 0) return 0;
 
-        uint256 _positionCollateralValue = _collateralValue(totalCollateral);
-        if (_positionCollateralValue == 0) return type(uint256).max;
+        uint256 _positionCollateralToLoan = _collateralToLoan(totalCollateral);
+        if (_positionCollateralToLoan == 0) return type(uint256).max;
 
-        return Math.mulDiv(_currentDebt, LLTV_SCALE, _positionCollateralValue);
+        return Math.mulDiv(_currentDebt, LLTV_SCALE, _positionCollateralToLoan);
     }
 
     ////////////////////////////////////////////////////////////////
@@ -398,7 +399,6 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @notice Returns the deposit limit for an address.
     function availableDepositLimit(address _owner) public view override returns (uint256) {
         if (paused) return 0;
-        if (TokenizedStrategy.isShutdown()) return 0;
         if (allowed[_owner]) return type(uint256).max;
         return 0;
     }
@@ -437,7 +437,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
 
         if (_currentDebt == 0 || totalCollateral == 0) return _idleAssets;
 
-        return _idleAssets + Math.min(_currentDebt, _collateralValue(totalCollateral));
+        return _idleAssets + Math.min(_currentDebt, _collateralToLoan(totalCollateral));
     }
 
     ////////////////////////////////////////////////////////////////
@@ -484,7 +484,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         if (_currentDebt == 0) return true;
         if (_collateralAmount == 0) return false;
 
-        uint256 _maxDebt = Math.mulDiv(_collateralValue(_collateralAmount), LLTV, LLTV_SCALE);
+        uint256 _maxDebt = Math.mulDiv(_collateralToLoan(_collateralAmount), LLTV, LLTV_SCALE);
         return _currentDebt <= _maxDebt;
     }
 
@@ -502,7 +502,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         return Math.mulDiv(_annualInterest, _elapsed, SECONDS_PER_YEAR);
     }
 
-    function _collateralValue(uint256 _collateralAmount) internal view returns (uint256) {
+    function _collateralToLoan(uint256 _collateralAmount) internal view returns (uint256) {
         if (_collateralAmount == 0) return 0;
 
         return Math.mulDiv(_collateralAmount, _price(), ORACLE_PRICE_SCALE);

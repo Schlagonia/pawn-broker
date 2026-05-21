@@ -528,16 +528,16 @@ contract RateManagementTest is LocalSetup {
 
         skip(CALL_DURATION + 1);
 
-        asset.mint(borrower, 1);
+        asset.mint(borrower, 100);
         vm.startPrank(borrower);
-        asset.approve(address(strategy), 1);
-        strategy.repay(1);
+        asset.approve(address(strategy), 100);
+        strategy.repay(100);
         vm.stopPrank();
 
         assertEq(strategy.rate(), RATE);
         (uint256 pendingRate,) = strategy.pendingRateUpdate();
         assertEq(pendingRate, NEW_RATE);
-        assertEq(strategy.totalDebt(), borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 1);
+        assertEq(strategy.totalDebt(), borrowAmount + _interest(borrowAmount, RATE, CALL_DURATION + 1) - 100);
     }
 
     function test_applyPendingRateRejectsBeforeCallDuration() public {

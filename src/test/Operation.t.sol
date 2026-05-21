@@ -125,7 +125,7 @@ contract OperationTest is Setup {
         uint256 liquidity = borrowAmount;
         uint256 callAmount = borrowAmount / 5;
         uint256 extraBorrowAmount = toAssetAmount(1);
-        uint256 collateralWithdrawAmount = 1;
+        uint256 collateralWithdrawAmount = 100;
 
         mintAndDepositIntoStrategy(strategy, user, liquidity);
         postCollateral(collateralAmount);

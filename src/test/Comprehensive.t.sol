@@ -266,18 +266,18 @@ contract ComprehensiveTest is Setup {
     //                2. INPUT VALIDATION TESTS
     // ================================================================
 
-    function test_postCollateralRevertsOnZeroAmount() public {
+    function test_postCollateralRevertsBelowDust() public {
+        vm.expectRevert("below dust");
         vm.prank(borrower);
-        vm.expectRevert("zero amount");
         strategy.postCollateral(0);
     }
 
-    function test_borrowRevertsOnZeroAmount() public {
+    function test_borrowRevertsBelowDust() public {
         mintAndDepositIntoStrategy(strategy, user, defaultLiquidityAmount());
         postCollateral(defaultCollateralAmount());
 
+        vm.expectRevert("below dust");
         vm.prank(borrower);
-        vm.expectRevert("zero amount");
         strategy.borrow(0, borrower);
     }
 
@@ -291,19 +291,19 @@ contract ComprehensiveTest is Setup {
         strategy.borrow(borrowAmt, address(0));
     }
 
-    function test_repayRevertsOnZeroAmount() public {
+    function test_repayRevertsBelowDust() public {
         _setupPosition();
 
+        vm.expectRevert("below dust");
         vm.prank(borrower);
-        vm.expectRevert("zero amount");
         strategy.repay(0);
     }
 
-    function test_withdrawCollateralRevertsOnZeroAmount() public {
+    function test_withdrawCollateralRevertsBelowDust() public {
         postCollateral(toCollateralAmount(1_000));
 
+        vm.expectRevert("below dust");
         vm.prank(borrower);
-        vm.expectRevert("zero amount");
         strategy.withdrawCollateral(0, borrower);
     }
 
@@ -521,7 +521,7 @@ contract ComprehensiveTest is Setup {
 
         vm.prank(borrower);
         vm.expectRevert("debt called");
-        strategy.withdrawCollateral(1, borrower);
+        strategy.withdrawCollateral(100, borrower);
     }
 
     function test_withdrawCollateralRevertsOnInsufficientCollateral() public {
@@ -861,8 +861,8 @@ contract ComprehensiveTest is Setup {
         uint256 expectedAfter1Year = borrowAmt + (borrowAmt * rate) / MAX_BPS;
         assertApproxEqAbs(strategy.totalDebt(), expectedAfter1Year, 1, "year 1 interest");
 
-        // Force on-chain accrual by posting tiny collateral
-        uint256 tiny = 1;
+        // Force on-chain accrual by posting dust-sized collateral.
+        uint256 tiny = 100;
         airdrop(collateral, borrower, tiny);
         vm.startPrank(borrower);
         collateral.approve(address(strategy), tiny);
@@ -1062,7 +1062,7 @@ contract ComprehensiveTest is Setup {
 
         vm.prank(borrower);
         vm.expectRevert("debt called");
-        strategy.withdrawCollateral(1, borrower);
+        strategy.withdrawCollateral(100, borrower);
     }
 
     function test_afterFullRepayOfCalledDebtCallClears() public {
@@ -1084,7 +1084,7 @@ contract ComprehensiveTest is Setup {
         // Now borrow and withdraw should work again (within limits)
         // Cannot borrow because maxDebt was reduced, but withdrawCollateral should work
         vm.prank(borrower);
-        strategy.withdrawCollateral(1, borrower);
+        strategy.withdrawCollateral(100, borrower);
     }
 
     function test_afterPartialRepayOfCalledDebtCallStillActive() public {
@@ -2098,16 +2098,16 @@ contract ComprehensiveTest is Setup {
         assertEq(strategy.currentLtv(), 0, "ltv zero with no debt");
     }
 
-    function test_verySmallAmounts1Wei() public {
+    function test_dustSizedAmountsWork() public {
         // Deposit a very small amount
         uint256 deposit = 1; // 1 wei of USDC
         mintAndDepositIntoStrategy(strategy, user, deposit);
         assertEq(strategy.maxDebt(), deposit, "maxDebt from 1 wei deposit");
 
-        // Post tiny collateral
-        uint256 tinyCollateral = 1;
+        // Borrower actions need to clear dust.
+        uint256 tinyCollateral = 100;
         postCollateral(tinyCollateral);
-        assertEq(strategy.totalCollateral(), tinyCollateral, "1 wei collateral");
+        assertEq(strategy.totalCollateral(), tinyCollateral, "dust collateral");
 
         // Withdraw tiny collateral
         vm.prank(borrower);
@@ -2237,15 +2237,6 @@ contract ComprehensiveTest is Setup {
 
     function test_availableDepositLimitNotAllowed() public {
         assertEq(strategy.availableDepositLimit(stranger), 0, "non-allowed user should have 0 deposit limit");
-    }
-
-    function test_availableDepositLimitShutdown() public {
-        setAllowed(user, true);
-
-        vm.prank(emergencyAdmin);
-        strategy.shutdownStrategy();
-
-        assertEq(strategy.availableDepositLimit(user), 0, "shutdown strategy should have 0 deposit limit");
     }
 
     function test_availableWithdrawLimitReturnsBalance() public {

@@ -12,7 +12,6 @@ For a more complete overview of how the Tokenized Strategies work please visit t
 
 - First you will need to install [Foundry](https://book.getfoundry.sh/getting-started/installation).
 NOTE: If you are on a windows machine it is recommended to use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)
-- Install [Node.js](https://nodejs.org/en/download/package-manager/)
 
 ### Clone this repository
 
@@ -20,8 +19,6 @@ NOTE: If you are on a windows machine it is recommended to use [WSL](https://lea
 git clone --recursive https://github.com/yearn/tokenized-strategy-foundry-mix
 
 cd tokenized-strategy-foundry-mix
-
-yarn
 ```
 
 ### Set your environment Variables
@@ -126,7 +123,7 @@ This should add all of the external `TokenizedStrategy` functions to the contrac
 
 ## CI
 
-This repo uses [GitHub Actions](.github/workflows) for CI. There are three workflows: lint, test and slither for static analysis.
+This repo uses [GitHub Actions](.github/workflows) for CI. There are three workflows: format, test and slither for static analysis.
 
 To enable test workflow you need to add the `ETH_RPC_URL` secret to your repo. For more info see [GitHub Actions docs](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization/managing-encrypted-secrets-for-your-repository-and-organization-for-github-codespaces#adding-secrets-for-a-repository).
 
