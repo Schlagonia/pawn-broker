@@ -252,7 +252,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     /// @param _amount The requested repayment amount.
     /// @return actualRepaid The amount of debt actually repaid.
     function repay(uint256 _amount) external onlyBorrower whenNotPaused nonReentrant returns (uint256 actualRepaid) {
-        require(_amount >= DUST, "below dust");
+        require(_amount > 0, "zero amount");
 
         uint256 _currentDebt = _accrueInterest();
         require(_currentDebt > 0, "no debt");

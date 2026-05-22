@@ -294,7 +294,7 @@ contract ComprehensiveTest is Setup {
     function test_repayRevertsBelowDust() public {
         _setupPosition();
 
-        vm.expectRevert("below dust");
+        vm.expectRevert("zero amount");
         vm.prank(borrower);
         strategy.repay(0);
     }
