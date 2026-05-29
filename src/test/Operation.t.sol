@@ -143,8 +143,10 @@ contract OperationTest is Setup {
         strategy.borrow(extraBorrowAmount, borrower);
 
         vm.prank(borrower);
-        vm.expectRevert("debt called");
         strategy.withdrawCollateral(collateralWithdrawAmount, borrower);
+        assertEq(strategy.totalCollateral(), collateralAmount - collateralWithdrawAmount);
+        assertEq(strategy.calledDebt(), callAmount);
+        assertGt(strategy.callDeadline(), 0);
 
         airdrop(asset, borrower, callAmount);
         vm.startPrank(borrower);
@@ -159,6 +161,7 @@ contract OperationTest is Setup {
         assertEq(strategy.repaidCalledDebt(), callAmount);
         assertEq(strategy.callDeadline(), 0);
         assertEq(strategy.maxDebt(), borrowAmount - callAmount);
+        assertEq(strategy.totalCollateral(), collateralAmount - (collateralWithdrawAmount * 2));
     }
 
     function test_overdueCallCanBeLiquidated() public {

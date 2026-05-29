@@ -202,12 +202,13 @@ contract ReportAccountingTest is LocalSetup {
 }
 
 contract BorrowerRepairTest is LocalSetup {
-    function test_partialRepaySucceedsAfterOverdueCall() public {
+    function test_partialRepayAndCollateralWithdrawSucceedsAfterOverdueCall() public {
         uint256 liquidity = 100_000e18;
         uint256 collateralAmount = 10e18;
         uint256 borrowAmount = 10_000e18;
         uint256 callAmount = 2_000e18;
         uint256 partialRepayAmount = 1_000e18;
+        uint256 withdrawAmount = 1e18;
 
         _allowAndDeposit(user, liquidity);
         _postCollateral(collateralAmount);
@@ -228,6 +229,7 @@ contract BorrowerRepairTest is LocalSetup {
         vm.startPrank(borrower);
         asset.approve(address(strategy), partialRepayAmount);
         uint256 actualRepaid = strategy.repay(partialRepayAmount);
+        strategy.withdrawCollateral(withdrawAmount, borrower);
         vm.stopPrank();
 
         assertEq(actualRepaid, partialRepayAmount);
@@ -236,6 +238,8 @@ contract BorrowerRepairTest is LocalSetup {
         assertEq(strategy.maxDebt(), liquidity - callAmount + accruedInterest);
         assertGt(strategy.callDeadline(), 0);
         assertEq(strategy.totalDebt(), debtAmountBefore - partialRepayAmount);
+        assertEq(strategy.totalCollateral(), collateralAmount - withdrawAmount);
+        assertEq(collateral.balanceOf(borrower), withdrawAmount);
     }
 
     function test_partialCollateralTopUpSucceedsWhileStillUnhealthy() public {

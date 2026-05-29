@@ -87,9 +87,9 @@ contract PawnBrokerFactory {
         uint256 _rateBps,
         uint256 _callDuration
     ) external view returns (address) {
-        EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[deploymentKey(
-            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
-        )];
+        EnumerableSet.AddressSet storage _pawnBrokers = pawnBrokersByKey[
+            deploymentKey(_asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration)
+        ];
         uint256 _length = _pawnBrokers.length();
         if (_length == 0) return address(0);
         return _pawnBrokers.at(_length - 1);
@@ -106,8 +106,8 @@ contract PawnBrokerFactory {
         uint256 _callDuration
     ) external view returns (address[] memory) {
         return pawnBrokersByKey[deploymentKey(
-            _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
-        )].values();
+                _asset, _borrower, _collateralAsset, _oracle, _lltv, _rateBps, _callDuration
+            )].values();
     }
 
     /// @notice Updates the default pawn broker role addresses.

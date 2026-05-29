@@ -513,15 +513,31 @@ contract ComprehensiveTest is Setup {
         strategy.withdrawCollateral(collateralAmt, borrower);
     }
 
-    function test_withdrawCollateralRevertsIfDebtCalled() public {
-        (,, uint256 borrowAmt) = _setupPosition();
+    function test_withdrawCollateralSucceedsDuringActiveCallIfSolvent() public {
+        (, uint256 collateralAmt, uint256 borrowAmt) = _setupPosition();
+        uint256 withdrawAmt = 100;
+        uint256 callAmount = borrowAmt / 2;
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.prank(borrower);
+        strategy.withdrawCollateral(withdrawAmt, borrower);
+
+        assertEq(strategy.totalCollateral(), collateralAmt - withdrawAmt, "collateral should decrease");
+        assertEq(strategy.calledDebt(), callAmount, "call should remain active");
+        assertGt(strategy.callDeadline(), 0, "deadline should remain active");
+    }
+
+    function test_withdrawCollateralDuringActiveCallRevertsIfWouldBecomeInsolvent() public {
+        (, uint256 collateralAmt, uint256 borrowAmt) = _setupPosition();
 
         vm.prank(management);
         strategy.callDebt(borrowAmt / 2);
 
         vm.prank(borrower);
-        vm.expectRevert("debt called");
-        strategy.withdrawCollateral(100, borrower);
+        vm.expectRevert("position unhealthy");
+        strategy.withdrawCollateral(collateralAmt, borrower);
     }
 
     function test_withdrawCollateralRevertsOnInsufficientCollateral() public {
@@ -1054,15 +1070,20 @@ contract ComprehensiveTest is Setup {
         strategy.borrow(oneUsdc, borrower);
     }
 
-    function test_duringActiveCallWithdrawCollateralBlocked() public {
-        (,, uint256 borrowAmt) = _setupPosition();
+    function test_duringActiveCallWithdrawCollateralAllowedIfSolvent() public {
+        (, uint256 collateralAmt, uint256 borrowAmt) = _setupPosition();
+        uint256 withdrawAmt = 100;
+        uint256 callAmount = borrowAmt / 2;
 
         vm.prank(management);
-        strategy.callDebt(borrowAmt / 2);
+        strategy.callDebt(callAmount);
 
         vm.prank(borrower);
-        vm.expectRevert("debt called");
-        strategy.withdrawCollateral(100, borrower);
+        strategy.withdrawCollateral(withdrawAmt, borrower);
+
+        assertEq(strategy.totalCollateral(), collateralAmt - withdrawAmt, "collateral should decrease");
+        assertEq(strategy.calledDebt(), callAmount, "call should remain active");
+        assertGt(strategy.callDeadline(), 0, "deadline should remain active");
     }
 
     function test_afterFullRepayOfCalledDebtCallClears() public {

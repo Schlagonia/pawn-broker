@@ -265,12 +265,11 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         emit Repaid(msg.sender, actualRepaid, debtAmount, calledDebt);
     }
 
-    /// @notice Withdraws posted collateral when no debt call is active.
+    /// @notice Withdraws posted collateral when the remaining position stays solvent.
     /// @param _amount The amount of collateral to withdraw.
     /// @param _receiver The address that receives the collateral.
     function withdrawCollateral(uint256 _amount, address _receiver) external onlyBorrower whenNotPaused nonReentrant {
         require(_receiver != address(0), "zero receiver");
-        require(callDeadline == 0, "debt called");
         require(_amount >= DUST, "below dust");
 
         uint256 _totalCollateral = totalCollateral;
@@ -352,9 +351,8 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         // If the caller has specified data.
         if (_data.length != 0) {
             // Do the callback.
-            ILiquidator(_receiver).liquidateCallback(
-                COLLATERAL_ASSET, msg.sender, collateralSeized, actualRepaid, _data
-            );
+            ILiquidator(_receiver)
+                .liquidateCallback(COLLATERAL_ASSET, msg.sender, collateralSeized, actualRepaid, _data);
         }
 
         asset.safeTransferFrom(msg.sender, address(this), actualRepaid);

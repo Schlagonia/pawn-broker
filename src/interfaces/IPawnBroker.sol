@@ -71,7 +71,7 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Repays outstanding debt.
     function repay(uint256 _amount) external returns (uint256 actualRepaid);
 
-    /// @notice Withdraws posted collateral when no debt call is active.
+    /// @notice Withdraws posted collateral when the remaining position stays solvent.
     function withdrawCollateral(uint256 _amount, address _receiver) external;
 
     /// @notice Calls debt and starts the repayment deadline window.
