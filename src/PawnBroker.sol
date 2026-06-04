@@ -20,6 +20,7 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     event Borrowed(address indexed caller, address indexed receiver, uint256 amount, uint256 debtAmount);
     event Repaid(address indexed caller, uint256 amount, uint256 debtAmount, uint256 calledDebt);
     event DebtCalled(address indexed caller, uint256 amount, uint256 totalCalledDebt, uint256 deadline);
+    event DebtCallCancelled(address indexed caller, uint256 amount, uint256 totalCalledDebt, uint256 deadline);
     event CallCleared(address indexed caller);
     event Liquidated(
         address indexed caller,
@@ -187,7 +188,13 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
 
     /// @notice Schedules a new liquidation bonus after the call-duration delay.
     function setLiquidationBonus(uint256 _newBonusBps) external onlyManagement {
-        require(_newBonusBps <= MAX_LIQUIDATION_BONUS_BPS || TokenizedStrategy.isShutdown(), "bad bonus");
+        if (!TokenizedStrategy.isShutdown()) {
+            require(_newBonusBps <= MAX_LIQUIDATION_BONUS_BPS, "bad bonus");
+            require(
+                Math.mulDiv(LLTV, MAX_BPS + _newBonusBps, MAX_BPS, Math.Rounding.Up) <= LLTV_SCALE,
+                "bonus unsafe for LLTV"
+            );
+        }
 
         uint256 _effectiveTime = block.timestamp + CALL_DURATION;
         pendingLiquidationBonusUpdate = PendingUpdate({value: _newBonusBps, effectiveTime: _effectiveTime});
@@ -308,6 +315,28 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
         emit DebtCalled(msg.sender, _newlyCalledDebt, calledDebt, callDeadline);
     }
 
+    /// @notice Cancels called debt and restores the cancelled amount to the borrowable debt ceiling.
+    /// @param _amount The requested amount of called debt to cancel.
+    function cancelCalledDebt(uint256 _amount) external onlyManagement whenNotPaused {
+        require(_amount > 0, "zero amount");
+
+        _accrueInterest();
+
+        uint256 _calledDebt = calledDebt;
+        require(_calledDebt > 0, "no called debt");
+
+        uint256 _cancelledDebt = Math.min(_amount, _calledDebt);
+        calledDebt = _calledDebt - _cancelledDebt;
+        maxDebt += _cancelledDebt;
+
+        if (calledDebt == 0) {
+            callDeadline = 0;
+            emit CallCleared(msg.sender);
+        }
+
+        emit DebtCallCancelled(msg.sender, _cancelledDebt, calledDebt, callDeadline);
+    }
+
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     /// @param _repayAmount The requested repayment amount.
     /// @param _receiver The address that receives seized collateral.
@@ -414,9 +443,12 @@ contract PawnBroker is BaseHooks, ReentrancyGuard {
     function _postWithdrawHook(uint256 _assets, uint256, address, address, uint256) internal override {
         if (_assets == 0) return;
 
-        uint256 _repaidCalledConsumed = Math.min(repaidCalledDebt, _assets);
-        if (_repaidCalledConsumed > 0) {
-            repaidCalledDebt -= _repaidCalledConsumed;
+        uint256 _repaidCalledDebt = repaidCalledDebt;
+        uint256 _repaidCalledConsumed;
+        uint256 _idleAssets = asset.balanceOf(address(this));
+        if (_repaidCalledDebt > _idleAssets) {
+            _repaidCalledConsumed = Math.min(_assets, _repaidCalledDebt - _idleAssets);
+            repaidCalledDebt = _repaidCalledDebt - _repaidCalledConsumed;
         }
 
         uint256 _borrowableConsumed = Math.min(maxDebt, _assets - _repaidCalledConsumed);

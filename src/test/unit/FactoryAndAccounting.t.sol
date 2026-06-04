@@ -634,6 +634,28 @@ contract RateManagementTest is LocalSetup {
         strategy.setLiquidationBonus(MAX_LIQUIDATION_BONUS + 1);
     }
 
+    function test_setLiquidationBonusRejectsUnsafeForLltv() public {
+        IHealthCheckStrategy highLltvStrategy = IHealthCheckStrategy(
+            pawnBrokerFactory.newPawnBroker(
+                address(asset),
+                "High LLTV PawnBroker",
+                borrower,
+                address(collateral),
+                address(oracle),
+                95e16,
+                RATE,
+                CALL_DURATION
+            )
+        );
+
+        vm.prank(management);
+        highLltvStrategy.acceptManagement();
+
+        vm.prank(management);
+        vm.expectRevert("bonus unsafe for LLTV");
+        highLltvStrategy.setLiquidationBonus(MAX_LIQUIDATION_BONUS);
+    }
+
     function test_applyPendingLiquidationBonusRejectsBeforeCallDuration() public {
         vm.prank(management);
         strategy.setLiquidationBonus(NEW_LIQUIDATION_BONUS);
@@ -761,6 +783,40 @@ contract MaxDebtAccountingTest is LocalSetup {
 
         assertEq(strategy.maxDebt(), depositAmount - callAmount);
         assertEq(strategy.repaidCalledDebt(), 0);
+    }
+
+    function test_depositWithdrawDoesNotConsumeCoveredRepaidCalledDebt() public {
+        uint256 depositAmount = 10_000e18;
+        uint256 collateralAmount = 10e18;
+        uint256 callAmount = 2_000e18;
+
+        _openFullUtilizedPosition(depositAmount, collateralAmount);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        asset.mint(borrower, callAmount);
+        vm.startPrank(borrower);
+        asset.approve(address(strategy), callAmount);
+        strategy.repay(callAmount);
+        vm.stopPrank();
+
+        assertEq(asset.balanceOf(address(strategy)), callAmount);
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
+
+        _allowAndDeposit(user, callAmount);
+
+        assertEq(asset.balanceOf(address(strategy)), callAmount * 2);
+        assertEq(strategy.maxDebt(), depositAmount);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
+
+        vm.prank(user);
+        strategy.withdraw(callAmount, user, user);
+
+        assertEq(asset.balanceOf(address(strategy)), callAmount);
+        assertEq(strategy.maxDebt(), depositAmount - callAmount);
+        assertEq(strategy.repaidCalledDebt(), callAmount);
     }
 
     function test_fullUtilizationPartialRepayThenFullIdleWithdrawCutsMaxDebt() public {

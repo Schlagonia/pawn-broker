@@ -61,6 +61,7 @@ contract ComprehensiveTest is Setup {
     event Borrowed(address indexed caller, address indexed receiver, uint256 amount, uint256 debtAmount);
     event Repaid(address indexed caller, uint256 amount, uint256 debtAmount, uint256 calledDebt);
     event DebtCalled(address indexed caller, uint256 amount, uint256 totalCalledDebt, uint256 deadline);
+    event DebtCallCancelled(address indexed caller, uint256 amount, uint256 totalCalledDebt, uint256 deadline);
     event CallCleared(address indexed caller);
     event Liquidated(
         address indexed caller,
@@ -172,6 +173,20 @@ contract ComprehensiveTest is Setup {
         vm.prank(borrower);
         vm.expectRevert("!management");
         strategy.callDebt(callAmt);
+    }
+
+    function test_onlyManagementCanCancelCalledDebt() public {
+        _setupPosition();
+
+        uint256 cancelAmt = toAssetAmount(100);
+
+        vm.prank(stranger);
+        vm.expectRevert("!management");
+        strategy.cancelCalledDebt(cancelAmt);
+
+        vm.prank(borrower);
+        vm.expectRevert("!management");
+        strategy.cancelCalledDebt(cancelAmt);
     }
 
     function test_onlyManagementCanSetAllowed() public {
@@ -321,6 +336,22 @@ contract ComprehensiveTest is Setup {
         vm.prank(management);
         vm.expectRevert("zero amount");
         strategy.callDebt(0);
+    }
+
+    function test_cancelCalledDebtRevertsOnZeroAmount() public {
+        _setupPosition();
+
+        vm.prank(management);
+        vm.expectRevert("zero amount");
+        strategy.cancelCalledDebt(0);
+    }
+
+    function test_cancelCalledDebtRevertsWhenNoCalledDebt() public {
+        _setupPosition();
+
+        vm.prank(management);
+        vm.expectRevert("no called debt");
+        strategy.cancelCalledDebt(1);
     }
 
     function test_liquidateRevertsOnZeroAmount() public {
@@ -1167,6 +1198,130 @@ contract ComprehensiveTest is Setup {
         assertEq(secondDeadline, block.timestamp + callDuration, "new deadline from current timestamp");
     }
 
+    function test_cancelCalledDebtPartiallyRestoresMaxDebtAndKeepsCallActive() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 maxDebtBefore = strategy.maxDebt();
+        uint256 callAmount = borrowAmt / 4;
+        uint256 cancelAmount = callAmount / 2;
+        uint256 extraBorrowAmount = toAssetAmount(1);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+        uint256 deadline = strategy.callDeadline();
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(cancelAmount);
+
+        assertEq(strategy.calledDebt(), callAmount - cancelAmount, "called debt reduced");
+        assertEq(strategy.maxDebt(), maxDebtBefore - callAmount + cancelAmount, "maxDebt restored by cancel");
+        assertEq(strategy.callDeadline(), deadline, "deadline should remain active");
+
+        vm.prank(borrower);
+        vm.expectRevert("debt called");
+        strategy.borrow(extraBorrowAmount, borrower);
+    }
+
+    function test_cancelCalledDebtFullyRestoresMaxDebtAndClearsDeadline() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 maxDebtBefore = strategy.maxDebt();
+        uint256 callAmount = borrowAmt / 4;
+        uint256 extraBorrowAmount = toAssetAmount(1);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(callAmount);
+
+        assertEq(strategy.calledDebt(), 0, "called debt cleared");
+        assertEq(strategy.maxDebt(), maxDebtBefore, "maxDebt fully restored");
+        assertEq(strategy.callDeadline(), 0, "deadline cleared");
+
+        vm.prank(borrower);
+        strategy.borrow(extraBorrowAmount, borrower);
+    }
+
+    function test_cancelCalledDebtCapsAtCalledDebt() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 maxDebtBefore = strategy.maxDebt();
+        uint256 callAmount = borrowAmt / 4;
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(callAmount * 2);
+
+        assertEq(strategy.calledDebt(), 0, "called debt cleared");
+        assertEq(strategy.maxDebt(), maxDebtBefore, "maxDebt restored only by called amount");
+        assertEq(strategy.callDeadline(), 0, "deadline cleared");
+    }
+
+    function test_cancelCalledDebtWorksWhenOverdue() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 callAmount = borrowAmt / 4;
+
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+        skip(callDuration + 1);
+
+        assertFalse(strategy.isHealthy(), "call should be overdue");
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(callAmount);
+
+        assertEq(strategy.calledDebt(), 0, "called debt cleared");
+        assertEq(strategy.callDeadline(), 0, "deadline cleared");
+        assertTrue(strategy.isHealthy(), "position should be healthy after cancel");
+    }
+
+    function test_cancelCalledDebtAfterMultipleCallsPreservesRemainingCall() public {
+        _setupPosition();
+
+        uint256 callAmount1 = toAssetAmount(1_000);
+        uint256 callAmount2 = toAssetAmount(2_000);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount1);
+
+        skip(callDuration / 2);
+
+        vm.prank(management);
+        strategy.callDebt(callAmount2);
+        uint256 deadline = strategy.callDeadline();
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(callAmount1);
+
+        assertEq(strategy.calledDebt(), callAmount2, "second call should remain");
+        assertEq(strategy.callDeadline(), deadline, "deadline should remain active");
+    }
+
+    function test_cancelCalledDebtAccruesInterestOnFullyCalledPosition() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 maxDebtBefore = strategy.maxDebt();
+
+        vm.prank(management);
+        strategy.callDebt(borrowAmt);
+
+        skip(365 days);
+
+        uint256 currentDebt = strategy.totalDebt();
+        uint256 accruedInterest = currentDebt - borrowAmt;
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(type(uint256).max);
+
+        assertEq(strategy.calledDebt(), 0, "called debt cleared");
+        assertEq(strategy.callDeadline(), 0, "deadline cleared");
+        assertEq(strategy.maxDebt(), maxDebtBefore + accruedInterest, "maxDebt restored with accrued interest");
+    }
+
     function test_callDebtReducesMaxDebtToZeroWithSaturation() public {
         // Deposit exactly the borrow amount so maxDebt == borrowAmt
         uint256 collateralAmt = defaultCollateralAmount();
@@ -1551,7 +1706,7 @@ contract ComprehensiveTest is Setup {
         assertEq(strategy.maxDebt(), depositAmount, "withdrawing repaid interest should restore maxDebt to deposit");
     }
 
-    function test_withdrawConsumesRepaidCalledDebtBeforeReducingMaxDebt() public {
+    function test_withdrawOnlyConsumesRepaidCalledDebtNotCoveredByIdle() public {
         uint256 deposit = toAssetAmount(100_000);
         uint256 collateralAmt = defaultCollateralAmount();
         uint256 borrowAmt = defaultBorrowAmount(collateralAmt);
@@ -1577,13 +1732,12 @@ contract ComprehensiveTest is Setup {
         uint256 repaidCalledBefore = strategy.repaidCalledDebt();
         assertEq(repaidCalledBefore, callAmount, "repaidCalledDebt set");
 
-        // User withdraws the repaid called debt amount
         vm.prank(user);
         strategy.withdraw(callAmount, user, user);
 
-        // maxDebt should NOT decrease further because withdrawal consumed repaidCalledDebt
-        assertEq(strategy.maxDebt(), maxDebtAfterRepay, "maxDebt unchanged when consuming repaidCalledDebt");
-        assertEq(strategy.repaidCalledDebt(), 0, "repaidCalledDebt should be consumed");
+        uint256 idleAfter = asset.balanceOf(address(strategy));
+        assertEq(strategy.maxDebt(), maxDebtAfterRepay - idleAfter, "maxDebt reduced by uncovered withdrawal");
+        assertEq(strategy.repaidCalledDebt(), idleAfter, "remaining idle should still cover repaid called debt");
     }
 
     function test_multipleDepositsFromDifferentUsersAccumulateMaxDebt() public {
@@ -2400,6 +2554,22 @@ contract ComprehensiveTest is Setup {
 
         vm.prank(management);
         strategy.callDebt(callAmount);
+    }
+
+    function test_cancelCalledDebtEmitsEvents() public {
+        (,, uint256 borrowAmt) = _setupPosition();
+
+        uint256 callAmount = borrowAmt / 4;
+        vm.prank(management);
+        strategy.callDebt(callAmount);
+
+        vm.expectEmit(true, true, true, true);
+        emit CallCleared(management);
+        vm.expectEmit(true, true, true, true);
+        emit DebtCallCancelled(management, callAmount, 0, 0);
+
+        vm.prank(management);
+        strategy.cancelCalledDebt(callAmount);
     }
 
     function test_callClearedEmitsEvent() public {

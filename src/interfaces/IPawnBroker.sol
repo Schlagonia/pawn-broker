@@ -77,6 +77,9 @@ interface IPawnBroker is IBaseHealthCheck {
     /// @notice Calls debt and starts the repayment deadline window.
     function callDebt(uint256 _amount) external;
 
+    /// @notice Cancels called debt and restores the cancelled amount to the borrowable debt ceiling.
+    function cancelCalledDebt(uint256 _amount) external;
+
     /// @notice Repays debt and seizes collateral from a liquidatable position.
     function liquidate(uint256 _repayAmount, address _receiver, bytes calldata _data)
         external
